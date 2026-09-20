@@ -1,0 +1,56 @@
+@boot;
+
+const COM1 = 0x3F8;
+const COM_LSR = 0x3FD;
+const SCREEN = 0xB8000;
+const ATTR = 0x0F;
+
+func serial_putc(ch) {
+    outb(COM1, ch);
+    return 0;
+}
+
+func serial_puts(a) {
+    let char* s = a;
+    let int i = 0;
+    while (s[i] != 0) { serial_putc(s[i]); i += 1; }
+    return 0;
+}
+
+func serial_putn(n) {
+    if (n == 0) { serial_putc('0'); return 0; }
+    let char buf[8];
+    let int k = 0;
+    while (n > 0) { buf[k] = '0' + n % 10; n /= 10; k += 1; }
+    while (k > 0) { k -= 1; serial_putc(buf[k]); }
+    return 0;
+}
+
+func screen_putc(pos, ch) {
+    let char* vid = SCREEN;
+    vid[pos * 2] = ch;
+    vid[pos * 2 + 1] = ATTR;
+    return pos + 1;
+}
+
+func screen_puts(a) {
+    let char* s = a;
+    let int pos = 0;
+    let int i = 0;
+    while (s[i] != 0) { pos = screen_putc(pos, s[i]); i += 1; }
+    return pos;
+}
+
+func main() {
+    serial_puts("lgc-os boot: serial ok\n");
+    screen_puts("lgc-os on screen");
+
+    let int sum = 0;
+    for (let int i = 0; i < 10; i += 1) { sum += i; }
+    serial_puts("sum(0..9)=");
+    serial_putn(sum);
+    serial_putc('\n');
+
+    while (1) { }
+    return 0;
+}
