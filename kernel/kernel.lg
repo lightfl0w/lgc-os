@@ -1,14 +1,18 @@
 @boot;
 
 const COM1 = 0x3F8;
-const COM_LSR = 0x3FD;
+const IDT = 0x120000;
+const IDTR = 0x121000;
+const GDT_CODE = 0x18;
+const TYPE_ATTR = 0x8E;
 const SCREEN = 0xB8000;
-const ATTR = 0x0F;
 
-func serial_putc(ch) {
-    outb(COM1, ch);
-    return 0;
-}
+let int ticks = 0;
+let int irq_count = 0;
+
+func putb(a, off, val) { let char* p = a; p[off] = val; return 0; }
+
+func serial_putc(ch) { outb(COM1, ch); return 0; }
 
 func serial_puts(a) {
     let char* s = a;
@@ -29,7 +33,7 @@ func serial_putn(n) {
 func screen_putc(pos, ch) {
     let char* vid = SCREEN;
     vid[pos * 2] = ch;
-    vid[pos * 2 + 1] = ATTR;
+    vid[pos * 2 + 1] = 0x0F;
     return pos + 1;
 }
 
@@ -41,14 +45,68 @@ func screen_puts(a) {
     return pos;
 }
 
-func main() {
-    serial_puts("lgc-os boot: serial ok\n");
-    screen_puts("lgc-os on screen");
+func bump() {
+    ticks += 1;
+    irq_count += 1;
+    return 0;
+}
 
-    let int sum = 0;
-    for (let int i = 0; i < 10; i += 1) { sum += i; }
-    serial_puts("sum(0..9)=");
-    serial_putn(sum);
+func handle_irq(v) {
+    bump();
+    serial_puts("  ISR vec=");
+    serial_putn(v);
+    serial_puts(" tick=");
+    serial_putn(ticks);
+    serial_putc('\n');
+    return 0;
+}
+
+naked func isr0() {
+    asm(0x50,0x51,0x52,0x53,0x55,0x56,0x57);
+    handle_irq(0);
+    asm(0x5f,0x5e,0x5d,0x5b,0x5a,0x59,0x58);
+    iretq();
+    return 0;
+}
+
+naked func isr32() {
+    asm(0x50,0x51,0x52,0x53,0x55,0x56,0x57);
+    handle_irq(32);
+    asm(0x5f,0x5e,0x5d,0x5b,0x5a,0x59,0x58);
+    iretq();
+    return 0;
+}
+
+func idt_set(vec, handler) {
+    let int* d = IDT;
+    d[vec * 2]     = (handler & 0xFFFF) | (GDT_CODE << 16) | (TYPE_ATTR << 40) | (((handler >> 16) & 0xFFFF) << 48);
+    d[vec * 2 + 1] = (handler >> 32) & 0xFFFFFFFF;
+    return 0;
+}
+
+func idt_load() {
+    putb(IDTR, 0, 0xFF);
+    putb(IDTR, 1, 0x0F);
+    let int i = 0;
+    while (i < 8) { putb(IDTR, 2 + i, (IDT >> (i * 8)) & 0xFF); i += 1; }
+    lidt(IDTR);
+    return 0;
+}
+
+func main() {
+    serial_puts("lgc-os: IDT + software-interrupt demo\n");
+    screen_puts("lgc-os IDT ok");
+
+    idt_set(0, addr(isr0));
+    idt_set(32, addr(isr32));
+    idt_load();
+    serial_puts("IDT loaded, handlers installed\n");
+
+    asm(0xCD, 0x20);
+    asm(0xCD, 0x20);
+
+    serial_puts("back in main: ticks=");
+    serial_putn(ticks);
     serial_putc('\n');
 
     while (1) { }
