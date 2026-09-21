@@ -1,0 +1,107 @@
+@boot;
+
+const COM1 = 0x3F8;
+const IDT = 0x120000;
+const IDTR = 0x121000;
+const GDT_CODE = 0x18;
+const TYPE_ATTR = 0x8E;
+const PML4 = 0x1000;
+const PDPT = 0x2000;
+const PDPT_HI = 0x4000;
+const PD_HI = 0x5000;
+const KERNEL_PA = 0x100000;
+const HIGHBASE = -2147483648;
+
+let int ticks = 0;
+
+func putb(a, off, val) { let char* p = a; p[off] = val; return 0; }
+func serial_putc(ch) { outb(COM1, ch); return 0; }
+func serial_puts(a) { let char* s = a; let int i = 0; while (s[i] != 0) { serial_putc(s[i]); i += 1; } return 0; }
+func serial_putx(v) {
+    let char d[17]; let int i = 16; d[16] = 0;
+    while (i > 0) {
+        let int n = v & 15;
+        let int ch = n + 48;
+        if (n >= 10) { ch = ch + 7; }
+        d[i - 1] = ch;
+        v = v >> 4;
+        i -= 1;
+    }
+    let char* s = d; let int k = 0; while (s[k] != 0) { serial_putc(s[k]); k += 1; }
+    return 0;
+}
+
+func idt_set(vec, handler) {
+    let int* d = IDT;
+    d[vec * 2]     = (handler & 0xFFFF) | (GDT_CODE << 16) | (TYPE_ATTR << 40) | (((handler >> 16) & 0xFFFF) << 48);
+    d[vec * 2 + 1] = (handler >> 32) & 0xFFFFFFFF;
+    return 0;
+}
+func idt_load() {
+    putb(IDTR, 0, 0xFF); putb(IDTR, 1, 0x0F);
+    let int i = 0;
+    while (i < 8) { putb(IDTR, 2 + i, (IDT >> (i * 8)) & 0xFF); i += 1; }
+    lidt(IDTR);
+    return 0;
+}
+func pic_init() {
+    outb(0x20, 0x11); outb(0x21, 0x20); outb(0x21, 0x04); outb(0x21, 0x01); outb(0x21, 0xFE); return 0;
+}
+func pit_init(div) { outb(0x43, 0x36); outb(0x40, div & 0xFF); outb(0x40, (div >> 8) & 0xFF); return 0; }
+
+naked func irq0_isr() {
+    asm(0x50,0x51,0x52,0x53,0x55,0x56,0x57,0x41,0x50,0x41,0x51,0x41,0x52,0x41,0x53,0x41,0x54,0x41,0x55,0x41,0x56,0x41,0x57);
+    ticks += 1;
+    outb(0x20, 0x20);
+    asm(0x41,0x5f,0x41,0x5e,0x41,0x5d,0x41,0x5c,0x41,0x5b,0x41,0x5a,0x41,0x59,0x41,0x58,0x5f,0x5e,0x5d,0x5b,0x5a,0x59,0x58,0x48,0xcf);
+}
+
+func map_high() {
+    let int* pml4 = PML4;
+    let int* pdpt_hi = PDPT_HI;
+    let int* pd_hi = PD_HI;
+    pd_hi[0] = 0x83;
+    pdpt_hi[510] = PD_HI | 0x03;
+    pml4[511] = PDPT_HI | 0x03;
+    pml4[0] = PDPT | 0x03;
+    setcr3(PML4);
+    return 0;
+}
+
+naked func jump_high(target) {
+    asm(0x48, 0x89, 0xF8, 0xFF, 0xE0);
+}
+
+func high_main() {
+    serial_puts("\n[now running in HIGH HALF]\n");
+    serial_puts("addr(high_main) @ high = 0x");
+    serial_putx(addr(high_main));
+    serial_putc('\n');
+    serial_puts("ticks via PIT after rejoin: ");
+    serial_putx(ticks);
+    serial_putc('\n');
+    while (1) { }
+    return 0;
+}
+
+func main() {
+    serial_puts("lgc-os: high-half kernel (dual map)\n");
+    serial_puts("addr(high_main) @ low  = 0x");
+    serial_putx(addr(high_main));
+    serial_putc('\n');
+
+    idt_set(32, addr(irq0_isr));
+    idt_load();
+    pic_init();
+    pit_init(1193);
+    sti();
+
+    let int target = addr(high_main) + HIGHBASE;
+    serial_puts("target=0x");
+    serial_putx(target);
+    serial_putc('\n');
+    map_high();
+    serial_puts("after map_high\n");
+    jump_high(target);
+    return 0;
+}

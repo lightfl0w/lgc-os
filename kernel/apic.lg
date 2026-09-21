@@ -1,0 +1,109 @@
+@boot;
+
+const COM1 = 0x3F8;
+const IDT = 0x120000;
+const IDTR = 0x121000;
+const GDT_CODE = 0x18;
+const TYPE_ATTR = 0x8E;
+
+const PML4 = 0x1000;
+const PDPT = 0x2000;
+const PD_LO = 0x3000;
+const PD_4GB = 0x4000;
+const APIC = 0xFEE00000;
+
+let int ticks = 0;
+
+func putb(a, off, val) { let char* p = a; p[off] = val; return 0; }
+func serial_putc(ch) { outb(COM1, ch); return 0; }
+func serial_puts(a) { let char* s = a; let int i = 0; while (s[i] != 0) { serial_putc(s[i]); i += 1; } return 0; }
+func serial_putn(n) {
+    if (n == 0) { serial_putc('0'); return 0; }
+    let char buf[8]; let int k = 0;
+    while (n > 0) { buf[k] = '0' + n % 10; n /= 10; k += 1; }
+    while (k > 0) { k -= 1; serial_putc(buf[k]); }
+    return 0;
+}
+
+func apic_write(off, val) { st32(APIC + off, val); return 0; }
+func apic_read(off) { return ld32(APIC + off); }
+
+func map_apic_page() {
+    let int* pdpt = PDPT;
+    let int* pd = PD_4GB;
+    pd[503] = 0xFEE00083;
+    pdpt[3] = PD_4GB | 0x03;
+    setcr3(PML4);
+    return 0;
+}
+
+func lapic_enable() {
+    asm(0xB9, 0x1B, 0x00, 0x00, 0x00,
+        0x0F, 0x32,
+        0x0D, 0x00, 0x08, 0x00, 0x00,
+        0x0F, 0x30);
+    return 0;
+}
+
+func timer_isr_handler() {
+    ticks += 1;
+    apic_write(0xB0, 0);
+    return 0;
+}
+
+naked func timer_isr() {
+    asm(0x50,0x51,0x52,0x53,0x55,0x56,0x57,0x41,0x50,0x41,0x51,0x41,0x52,0x41,0x53,0x41,0x54,0x41,0x55,0x41,0x56,0x41,0x57);
+    timer_isr_handler();
+    asm(0x41,0x5f,0x41,0x5e,0x41,0x5d,0x41,0x5c,0x41,0x5b,0x41,0x5a,0x41,0x59,0x41,0x58,0x5f,0x5e,0x5d,0x5b,0x5a,0x59,0x58,0x48,0xcf);
+}
+
+func idt_set(vec, handler) {
+    let int* d = IDT;
+    d[vec * 2]     = (handler & 0xFFFF) | (GDT_CODE << 16) | (TYPE_ATTR << 40) | (((handler >> 16) & 0xFFFF) << 48);
+    d[vec * 2 + 1] = (handler >> 32) & 0xFFFFFFFF;
+    return 0;
+}
+
+func idt_load() {
+    putb(IDTR, 0, 0xFF); putb(IDTR, 1, 0x0F);
+    let int i = 0;
+    while (i < 8) { putb(IDTR, 2 + i, (IDT >> (i * 8)) & 0xFF); i += 1; }
+    lidt(IDTR);
+    return 0;
+}
+
+func main() {
+    serial_puts("lgc-os: local APIC timer\n");
+
+    map_apic_page();
+    serial_puts("step: page mapped\n");
+    lapic_enable();
+    serial_puts("step: lapic enabled\n");
+    apic_write(0xF0, 0x1FF);
+    serial_puts("step: svr set\n");
+    apic_write(0x3E0, 0xB);
+    apic_write(0x320, 32 | 0x20000);
+    apic_write(0x380, 200000);
+    serial_puts("step: timer armed\n");
+    serial_puts("cc0=");
+    serial_putn(apic_read(0x390));
+    serial_putc('\n');
+
+    idt_set(32, addr(timer_isr));
+    idt_load();
+    serial_puts("step: idt loaded, entering loop\n");
+
+    sti();
+
+    let int shown = 0;
+    while (1) {
+        let int t = ticks;
+        if (t - shown >= 1) {
+            shown = t;
+            serial_puts("apic tick=");
+            serial_putn(t);
+            serial_putc('\n');
+        }
+    }
+    return 0;
+}
