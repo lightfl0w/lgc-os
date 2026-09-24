@@ -1,0 +1,146 @@
+@import "io.lg";
+@import "core.lg";
+@import "heap.lg";
+@import "fs.lg";
+@import "elf.lg";
+
+let char line[128];
+let char argbuf[32];
+let int uframe[8];
+
+func s_len(p) { let char* s = p; let int i = 0; while (s[i] != 0) { i += 1; } return i; }
+func s_put(p) { let char* s = p; let int i = 0; while (s[i] != 0) { serial_putc(s[i]); i += 1; } return 0; }
+func s_eq(a, b) {
+    let char* x = a; let char* y = b; let int i = 0;
+    while (1) { if (x[i] != y[i]) { return 0; } if (x[i] == 0) { return 1; } i += 1; }
+    return 0;
+}
+func s_puts_at(b, start) {
+    let char* s = b; let int i = start;
+    while (s[i] != 0) { serial_putc(s[i]); i += 1; }
+    return 0;
+}
+func copy_arg(b, start, dst) {
+    let char* s = b; let char* d = dst; let int i = 0;
+    while (s[start + i] != 0) { d[i] = s[start + i]; i += 1; }
+    d[i] = 0; return i;
+}
+func parse_dec(b, start) {
+    let char* s = b; let int v = 0; let int i = start;
+    while (s[i] >= '0' && s[i] <= '9') { v = v * 10 + (s[i] - '0'); i += 1; }
+    return v;
+}
+
+func readline(buf) {
+    let char* b = buf; let int n = 0;
+    while (1) {
+        let int c = console_getc();
+        if (c == 10 || c == 13) { serial_putc('\n'); b[n] = 0; return n; }
+        if (c == 8 || c == 127) {
+            if (n > 0) { n -= 1; serial_putc(8); serial_putc(' '); serial_putc(8); }
+        } else if (c >= 32) {
+            if (n < 127) { b[n] = c; n += 1; serial_putc(c); }
+        }
+    }
+    return 0;
+}
+
+func cmd_help() {
+    serial_puts("commands:\n");
+    serial_puts("  help            this text\n");
+    serial_puts("  ls              list ramfs files\n");
+    serial_puts("  cat <file>      dump a file (non-printable as '.')\n");
+    serial_puts("  exec <file.elf> load ELF via VFS and jump to ring3\n");
+    serial_puts("  info            ticks / heap / file count\n");
+    serial_puts("  heap <bytes>    alloc+free from kernel heap\n");
+    serial_puts("  echo <text>     print text\n");
+    serial_puts("  clear           clear screen\n");
+    return 0;
+}
+
+func cmd_info() {
+    serial_puts("ticks="); serial_putn(ticks); serial_putc('\n');
+    serial_puts("heap: brk="); serial_putn(brk); serial_puts(" holes="); serial_putn(nhole); serial_putc('\n');
+    serial_puts("files="); serial_putn(fs_count()); serial_putc('\n');
+    return 0;
+}
+
+func cmd_clear() {
+    vga_clear();
+    return 0;
+}
+
+func cmd_heap() {
+    let char* ap = argbuf;
+    let int n = parse_dec(ap, 0);
+    if (n == 0) { n = 32; }
+    let int off = heap_alloc(n);
+    serial_puts("alloc("); serial_putn(n); serial_puts(") -> off="); serial_putn(off);
+    serial_puts("  brk="); serial_putn(brk); serial_putc('\n');
+    if (off >= 0) { heap_free(off, n); serial_puts("freed\n"); }
+    return 0;
+}
+
+func cmd_cat() {
+    let char* ap = argbuf;
+    if (s_len(ap) == 0) { serial_puts("usage: cat <file>\n"); return 0; }
+    let int fd = fs_open(ap);
+    if (fd < 0) { serial_puts("cat: no such file: "); s_put(ap); serial_putc('\n'); return 0; }
+    let int sz = fs_size(fd);
+    let int d0 = file_data(fd); let char* d = d0;
+    let int i = 0;
+    while (i < sz) { let int c = d[i]; if (c >= 32 && c < 127) { serial_putc(c); } else { serial_putc('.'); } i += 1; }
+    serial_putc('\n');
+    return 0;
+}
+
+func cmd_exec() {
+    let char* ap = argbuf;
+    if (s_len(ap) == 0) { serial_puts("usage: exec <elf-file>\n"); return 0; }
+    let int fd = fs_open(ap);
+    if (fd < 0) { serial_puts("exec: no such file: "); s_put(ap); serial_putc('\n'); return 0; }
+    let int img0 = file_data(fd); let char* img = img0;
+    let int entry = elf_load(img);
+    serial_puts("exec: "); s_put(ap); serial_puts(" entry="); serial_puthex(entry); serial_putc('\n');
+    serial_puts("jumping to ring3 (control does not return)\n[");
+    let int* u = uframe;
+    u[0] = entry; u[1] = CS3; u[2] = 0x2; u[3] = USTACK; u[4] = SS3;
+    let int uf = uframe;
+    enter_user(uf);
+    return 0;
+}
+
+func dispatch(buf) {
+    let char* b = buf;
+    let int ci = 0;
+    while (b[ci] != 0 && b[ci] != ' ') { ci += 1; }
+    let int cmdend = ci;
+    let int ai = ci;
+    while (b[ai] == ' ') { ai += 1; }
+    let int argstart = ai;
+    b[cmdend] = 0;
+    let char* cmd = b;
+    if (cmdend == 0) { return 0; }
+    let char* ab = argbuf;
+    if (s_eq(cmd, "help")) { cmd_help(); return 0; }
+    if (s_eq(cmd, "ls")) { vfs_ls(); return 0; }
+    if (s_eq(cmd, "info")) { cmd_info(); return 0; }
+    if (s_eq(cmd, "clear")) { cmd_clear(); return 0; }
+    if (s_eq(cmd, "echo")) { s_puts_at(b, argstart); serial_putc('\n'); return 0; }
+    if (s_eq(cmd, "heap")) { copy_arg(b, argstart, ab); cmd_heap(); return 0; }
+    if (s_eq(cmd, "cat")) { copy_arg(b, argstart, ab); cmd_cat(); return 0; }
+    if (s_eq(cmd, "exec")) { copy_arg(b, argstart, ab); cmd_exec(); return 0; }
+    serial_puts("unknown command: "); s_put(cmd); serial_puts(" (try 'help')\n");
+    return 0;
+}
+
+func shell() {
+    serial_puts("\nlgc-os microkernel. type 'help'.\n");
+    while (1) {
+        serial_puts("lgc> ");
+        let char* lp = line;
+        readline(lp);
+        dispatch(lp);
+    }
+    return 0;
+}

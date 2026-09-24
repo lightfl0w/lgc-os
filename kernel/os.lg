@@ -1,0 +1,33 @@
+@boot;
+@import "io.lg";
+@import "core.lg";
+@import "heap.lg";
+@import "fs.lg";
+@import "elf.lg";
+@import "usrelf.lg";
+@import "shell.lg";
+
+let char elfimg[512];
+
+func main() {
+    vga_clear();
+    kbd_init();
+    serial_puts("lgc-os booting: gdt/idt/paging/pic/pit...\n");
+    gdt_init();
+    mark_user_pages();
+    idt_set_dpl(0x80, addr(syscall_write_char), 3);
+    idt_set_dpl(32, addr(irq0_isr), 0);
+    idt_set_dpl(13, addr(gp_fault), 0);
+    idt_set_dpl(14, addr(pf_fault), 0);
+    idt_load();
+    pic_init();
+    pit_init(1193);
+    sti();
+
+    let char* sp = elfimg;
+    let int fsize = usrelf_bytes(sp);
+    fs_create("init.elf", sp, fsize);
+
+    shell();
+    return 0;
+}

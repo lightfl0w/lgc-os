@@ -1,0 +1,77 @@
+@import "io.lg";
+
+const NFILE = 4;
+const FMAX = 512;
+
+let char fdata[2048];
+let char fnames[64];
+let int fuse[4];
+let int flen[4];
+
+func file_data(i) { return fdata + i * FMAX; }
+func name_data(i) { return fnames + i * 16; }
+
+func name_eq(i, other) {
+    let int nd = name_data(i);
+    let int j = 0;
+    while (1) {
+        let int a = b_get(nd, j);
+        let int c = b_get(other, j);
+        if (a != c) { return 0; }
+        if (a == 0) { return 1; }
+        j += 1;
+    }
+    return 0;
+}
+
+func fs_create(name, buf, len) {
+    let int slot = -1; let int i = 0;
+    while (i < NFILE) { if (fuse[i] == 0) { slot = i; i = NFILE; } i += 1; }
+    if (slot < 0) { return -1; }
+    let int j = 0;
+    while (b_get(name, j) != 0) { b_set(name_data(slot), j, b_get(name, j)); j += 1; }
+    b_set(name_data(slot), j, 0);
+    j = 0;
+    while (j < len) { b_set(file_data(slot), j, b_get(buf, j)); j += 1; }
+    flen[slot] = len;
+    fuse[slot] = 1;
+    return slot;
+}
+
+func fs_open(name) {
+    let int i = 0;
+    while (i < NFILE) { if (fuse[i] != 0) { if (name_eq(i, name)) { return i; } } i += 1; }
+    return -1;
+}
+
+func fs_size(i) { return flen[i]; }
+
+func fs_count() {
+    let int i = 0; let int c = 0;
+    while (i < NFILE) { if (fuse[i] != 0) { c += 1; } i += 1; }
+    return c;
+}
+
+func fs_read(i, dst, n) {
+    let int j = 0;
+    let int m = flen[i];
+    if (n < m) { m = n; }
+    while (j < m) { b_set(dst, j, b_get(file_data(i), j)); j += 1; }
+    return m;
+}
+
+func vfs_ls() {
+    let int i = 0;
+    while (i < NFILE) {
+        if (fuse[i] != 0) {
+            serial_puts("  ");
+            let int j = 0;
+            while (b_get(name_data(i), j) != 0) { serial_putc(b_get(name_data(i), j)); j += 1; }
+            serial_puts("  (");
+            serial_putn(flen[i]);
+            serial_puts(" bytes)\n");
+        }
+        i += 1;
+    }
+    return 0;
+}

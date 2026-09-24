@@ -1,0 +1,24 @@
+@import "io.lg";
+
+func elf_load(image) {
+    let int entry = b_g64(image, 24);
+    let int phoff = b_g64(image, 32);
+    let int phes = b_g16(image, 54);
+    let int phnum = b_g16(image, 56);
+    let int i = 0;
+    while (i < phnum) {
+        let int base = phoff + i * phes;
+        if (b_g32(image, base) == 1) {
+            let int po = b_g64(image, base + 8);
+            let int pv = b_g64(image, base + 16);
+            let int fsz = b_g64(image, base + 32);
+            let int msz = b_g64(image, base + 40);
+            let char* dst = pv;
+            let int j = 0;
+            while (j < fsz) { dst[j] = b_get(image, po + j); j += 1; }
+            while (j < msz) { dst[j] = 0; j += 1; }
+        }
+        i += 1;
+    }
+    return entry;
+}
