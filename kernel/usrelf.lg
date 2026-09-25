@@ -1,6 +1,6 @@
 @import "io.lg";
 
-const USRELF_LEN = 194;
+const USRELF_LEN = 151;
 
 func usrelf_bytes(dst) {
     b_p32(dst, 0, 0x464c457f);
@@ -27,31 +27,21 @@ func usrelf_bytes(dst) {
     b_p32(dst, 84, 0x00000000);
     b_p32(dst, 88, 0x00180000);
     b_p32(dst, 92, 0x00000000);
-    b_p32(dst, 96, 0x0000004a);
+    b_p32(dst, 96, 0x0000001f);
     b_p32(dst, 100, 0x00000000);
-    b_p32(dst, 104, 0x0000004a);
+    b_p32(dst, 104, 0x0000001f);
     b_p32(dst, 108, 0x00000000);
     b_p32(dst, 112, 0x00001000);
     b_p32(dst, 116, 0x00000000);
-    b_p32(dst, 120, 0x0052bf48);
-    b_p32(dst, 124, 0x00000000);
-    b_p32(dst, 128, 0x80cd0000);
-    b_p32(dst, 132, 0x0049bf48);
-    b_p32(dst, 136, 0x00000000);
+    b_p32(dst, 120, 0x000002b8);
+    b_p32(dst, 124, 0x0018bf00);
+    b_p32(dst, 128, 0x80cd0018);
+    b_p32(dst, 132, 0x000001b8);
+    b_p32(dst, 136, 0x002abf00);
     b_p32(dst, 140, 0x80cd0000);
-    b_p32(dst, 144, 0x004ebf48);
-    b_p32(dst, 148, 0x00000000);
-    b_p32(dst, 152, 0x80cd0000);
-    b_p32(dst, 156, 0x0047bf48);
-    b_p32(dst, 160, 0x00000000);
-    b_p32(dst, 164, 0x80cd0000);
-    b_p32(dst, 168, 0x0033bf48);
-    b_p32(dst, 172, 0x00000000);
-    b_p32(dst, 176, 0x80cd0000);
-    b_p32(dst, 180, 0x0021bf48);
-    b_p32(dst, 184, 0x00000000);
-    b_p32(dst, 188, 0x80cd0000);
-    b_set(dst, 192, 235);
-    b_set(dst, 193, 254);
-    return 194;
+    b_p32(dst, 144, 0x474e4952);
+    b_set(dst, 148, 51);
+    b_set(dst, 149, 33);
+    b_set(dst, 150, 0);
+    return 151;
 }

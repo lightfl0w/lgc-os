@@ -102,7 +102,7 @@ func cmd_exec() {
     let int img0 = file_data(fd); let char* img = img0;
     let int entry = elf_load(img);
     serial_puts("exec: "); s_put(ap); serial_puts(" entry="); serial_puthex(entry); serial_putc('\n');
-    serial_puts("jumping to ring3 (control does not return)\n[");
+    serial_putc('[');
     let int* u = uframe;
     u[0] = entry; u[1] = CS3; u[2] = 0x2; u[3] = USTACK; u[4] = SS3;
     let int uf = uframe;
@@ -136,11 +136,27 @@ func dispatch(buf) {
 
 func shell() {
     serial_puts("\nlgc-os microkernel. type 'help'.\n");
+    repl();
+    return 0;
+}
+
+func repl() {
     while (1) {
         serial_puts("lgc> ");
         let char* lp = line;
         readline(lp);
         dispatch(lp);
     }
+    return 0;
+}
+
+func exec_resume() {
+    sti();
+    serial_puts("] exit=");
+    let int c = xcode;
+    if (c < 0) { serial_putc('-'); c = 0 - c; }
+    serial_putn(c);
+    serial_putc('\n');
+    repl();
     return 0;
 }

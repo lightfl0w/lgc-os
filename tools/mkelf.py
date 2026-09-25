@@ -1,15 +1,24 @@
 import sys, struct
 
-def code_bytes(msg, entry):
-    out = bytearray()
-    for ch in msg.encode():
-        out += b'\x48\xbf' + struct.pack('<Q', ch)
-        out += b'\xcd\x80'
-    out += b'\xeb\xfe'
-    return bytes(out)
+SYS_PUTC = 0
+SYS_EXIT = 1
+SYS_PUTS = 2
 
-def build_elf(msg, entry):
-    code = code_bytes(msg, entry)
+PREFIX_LEN = 24
+
+def code_bytes(msg, entry, exitcode):
+    out = bytearray()
+    out += b'\xb8' + struct.pack('<I', SYS_PUTS)
+    out += b'\xbf' + struct.pack('<I', entry + PREFIX_LEN)
+    out += b'\xcd\x80'
+    out += b'\xb8' + struct.pack('<I', SYS_EXIT)
+    out += b'\xbf' + struct.pack('<I', exitcode & 0xFFFFFFFF)
+    out += b'\xcd\x80'
+    assert len(out) == PREFIX_LEN
+    return bytes(out) + msg.encode() + b'\x00'
+
+def build_elf(msg, entry, exitcode):
+    code = code_bytes(msg, entry, exitcode)
     ehsize, phentsize, phnum = 64, 56, 1
     phoff = ehsize
     off = phoff + phentsize * phnum
@@ -38,12 +47,13 @@ def emit_lg(image, path):
         f.write('    return %d;\n}\n' % n)
 
 if __name__ == '__main__':
-    msg = sys.argv[1] if len(sys.argv) > 1 else 'RING3!\n'
+    msg = sys.argv[1] if len(sys.argv) > 1 else 'RING3!'
     entry = int(sys.argv[2], 0) if len(sys.argv) > 2 else 0x180000
     elf_path = sys.argv[3] if len(sys.argv) > 3 else 'usr/hello.elf'
     lg_path = sys.argv[4] if len(sys.argv) > 4 else 'kernel/usrelf.lg'
-    image = build_elf(msg, entry)
+    exitcode = int(sys.argv[5], 0) if len(sys.argv) > 5 else 0
+    image = build_elf(msg, entry, exitcode)
     with open(elf_path, 'wb') as f:
         f.write(image)
     emit_lg(image, lg_path)
-    print('wrote %s (%d bytes) and %s' % (elf_path, len(image), lg_path))
+    print('wrote %s (%d bytes, exit=%d) and %s' % (elf_path, len(image), exitcode, lg_path))

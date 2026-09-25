@@ -15,7 +15,7 @@ func main() {
     serial_puts("lgc-os booting: gdt/idt/paging/pic/pit...\n");
     gdt_init();
     mark_user_pages();
-    idt_set_dpl(0x80, addr(syscall_write_char), 3);
+    idt_set_dpl(0x80, addr(syscall_isr), 3);
     idt_set_dpl(32, addr(irq0_isr), 0);
     idt_set_dpl(13, addr(gp_fault), 0);
     idt_set_dpl(14, addr(pf_fault), 0);
