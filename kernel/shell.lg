@@ -8,33 +8,33 @@ let char sh_line[128];
 let char sh_argbuf[32];
 let int user_frame[8];
 
-func str_len(p) { let char* s = p; let int i = 0; while (s[i] != 0) { i += 1; } return i; }
-func str_put(p) { let char* s = p; let int i = 0; while (s[i] != 0) { serial_putc(s[i]); i += 1; } return 0; }
+func str_len(p) { let char* s = p; let i = 0; while (s[i] != 0) { i += 1; } return i; }
+func str_put(p) { let char* s = p; let i = 0; while (s[i] != 0) { serial_putc(s[i]); i += 1; } return 0; }
 func str_eq(a, b) {
-    let char* x = a; let char* y = b; let int i = 0;
+    let char* x = a; let char* y = b; let i = 0;
     while (1) { if (x[i] != y[i]) { return 0; } if (x[i] == 0) { return 1; } i += 1; }
     return 0;
 }
 func str_puts_at(b, start) {
-    let char* s = b; let int i = start;
+    let char* s = b; let i = start;
     while (s[i] != 0) { serial_putc(s[i]); i += 1; }
     return 0;
 }
 func sh_copy_arg(b, start, dst) {
-    let char* s = b; let char* d = dst; let int i = 0;
+    let char* s = b; let char* d = dst; let i = 0;
     while (s[start + i] != 0) { d[i] = s[start + i]; i += 1; }
     d[i] = 0; return i;
 }
 func str_parse_dec(b, start) {
-    let char* s = b; let int v = 0; let int i = start;
+    let char* s = b; let v = 0; let i = start;
     while (s[i] >= '0' && s[i] <= '9') { v = v * 10 + (s[i] - '0'); i += 1; }
     return v;
 }
 
 func sh_readline(buf) {
-    let char* b = buf; let int n = 0;
+    let char* b = buf; let n = 0;
     while (1) {
-        let int c = console_getc();
+        let c = console_getc();
         if (c == 10 || c == 13) { serial_putc('\n'); b[n] = 0; return n; }
         if (c == 8 || c == 127) {
             if (n > 0) { n -= 1; serial_putc(8); serial_putc(' '); serial_putc(8); }
@@ -72,9 +72,9 @@ func sh_cmd_clear() {
 
 func sh_cmd_heap() {
     let char* ap = sh_argbuf;
-    let int n = str_parse_dec(ap, 0);
+    let n = str_parse_dec(ap, 0);
     if (n == 0) { n = 32; }
-    let int off = heap_alloc(n);
+    let off = heap_alloc(n);
     serial_puts("alloc("); serial_putn(n); serial_puts(") -> off="); serial_putn(off);
     serial_puts("  brk="); serial_putn(heap_brk); serial_putc('\n');
     if (off >= 0) { heap_free(off, n); serial_puts("freed\n"); }
@@ -84,12 +84,11 @@ func sh_cmd_heap() {
 func sh_cmd_cat() {
     let char* ap = sh_argbuf;
     if (str_len(ap) == 0) { serial_puts("usage: cat <file>\n"); return 0; }
-    let int fd = fs_open(ap);
+    let fd = fs_open(ap);
     if (fd < 0) { serial_puts("cat: no such file: "); str_put(ap); serial_putc('\n'); return 0; }
-    let int sz = fs_size(fd);
-    let int d0 = fs_file_data(fd); let char* d = d0;
-    let int i = 0;
-    while (i < sz) { let int c = d[i]; if (c >= 32 && c < 127) { serial_putc(c); } else { serial_putc('.'); } i += 1; }
+    let sz = fs_size(fd);
+    let d0 = fs_file_data(fd); let char* d = d0;
+    for i in 0..sz { let c = d[i]; if (c >= 32 && c < 127) { serial_putc(c); } else { serial_putc('.'); } }
     serial_putc('\n');
     return 0;
 }
@@ -97,27 +96,27 @@ func sh_cmd_cat() {
 func sh_cmd_exec() {
     let char* ap = sh_argbuf;
     if (str_len(ap) == 0) { serial_puts("usage: exec <elf-file>\n"); return 0; }
-    let int fd = fs_open(ap);
+    let fd = fs_open(ap);
     if (fd < 0) { serial_puts("exec: no such file: "); str_put(ap); serial_putc('\n'); return 0; }
-    let int img0 = fs_file_data(fd); let char* img = img0;
-    let int entry = elf_load(img);
+    let img0 = fs_file_data(fd); let char* img = img0;
+    let entry = elf_load(img);
     serial_puts("exec: "); str_put(ap); serial_puts(" entry="); serial_puthex(entry); serial_putc('\n');
     serial_putc('[');
     let int* u = user_frame;
     u[0] = entry; u[1] = SEL_UCODE; u[2] = 0x2; u[3] = USER_STACK; u[4] = SEL_UDATA;
-    let int uf = user_frame;
+    let uf = user_frame;
     user_enter(uf);
     return 0;
 }
 
 func sh_dispatch(buf) {
     let char* b = buf;
-    let int ci = 0;
+    let ci = 0;
     while (b[ci] != 0 && b[ci] != ' ') { ci += 1; }
-    let int cmdend = ci;
-    let int ai = ci;
+    let cmdend = ci;
+    let ai = ci;
     while (b[ai] == ' ') { ai += 1; }
-    let int argstart = ai;
+    let argstart = ai;
     b[cmdend] = 0;
     let char* cmd = b;
     if (cmdend == 0) { return 0; }
@@ -153,7 +152,7 @@ func sh_repl() {
 func sh_resume() {
     sti();
     serial_puts("] exit=");
-    let int c = user_exit_code;
+    let c = user_exit_code;
     if (c < 0) { serial_putc('-'); c = 0 - c; }
     serial_putn(c);
     serial_putc('\n');

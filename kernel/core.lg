@@ -31,21 +31,19 @@ func gdt_make_desc(base, limit, access, flags) {
 
 func gdt_init() {
     let int* g = GDT_BASE;
-    let int cq0 = gdt_make_desc(0, 0xFFFFF, 0x9A, 0xA);
-    let int dq0 = gdt_make_desc(0, 0xFFFFF, 0x92, 0xC);
-    let int cq3 = gdt_make_desc(0, 0xFFFFF, 0xFA, 0xA);
-    let int dq3 = gdt_make_desc(0, 0xFFFFF, 0xF2, 0xC);
-    let int tq0 = gdt_make_desc(TSS_BASE, 103, 0x89, 0);
+    let cq0 = gdt_make_desc(0, 0xFFFFF, 0x9A, 0xA);
+    let dq0 = gdt_make_desc(0, 0xFFFFF, 0x92, 0xC);
+    let cq3 = gdt_make_desc(0, 0xFFFFF, 0xFA, 0xA);
+    let dq3 = gdt_make_desc(0, 0xFFFFF, 0xF2, 0xC);
+    let tq0 = gdt_make_desc(TSS_BASE, 103, 0x89, 0);
     g[0] = 0;
     g[1] = cq0; g[2] = dq0;
     g[3] = cq0; g[4] = dq0;
     g[5] = tq0; g[6] = 0;
     g[12] = cq3; g[13] = dq3;
     let char* t = TSS_BASE;
-    let int i = 0;
-    while (i < 26) { t[i] = 0; i += 1; }
-    let int j = 0;
-    while (j < 8) { t[4 + j] = (KSTACK_TOP >> (j * 8)) & 255; j += 1; }
+    for i in 0..26 { t[i] = 0; }
+    for j in 0..8 { t[4 + j] = (KSTACK_TOP >> (j * 8)) & 255; }
     let int* r = GDTR_BASE;
     r[0] = 111 | (GDT_BASE << 16);
     lgdt(GDTR_BASE);
@@ -74,8 +72,7 @@ func idt_set_gate(vec, handler, dpl) {
 func idt_load() {
     let char* p = IDTR_BASE;
     p[0] = 0xFF; p[1] = 0x0F;
-    let int i = 0;
-    while (i < 8) { p[2 + i] = (IDT_BASE >> (i * 8)) & 0xFF; i += 1; }
+    for i in 0..8 { p[2 + i] = (IDT_BASE >> (i * 8)) & 0xFF; }
     lidt(IDTR_BASE);
     return 0;
 }
@@ -84,7 +81,7 @@ func pic_init() {
     outb(0x20, 0x11); outb(0x21, 0x20); outb(0x21, 0x04); outb(0x21, 0x01); outb(0x21, 0xFE);
     return 0;
 }
-func pit_init(div) { let int d = div; outb(0x43, 0x36); outb(0x40, d & 0xFF); outb(0x40, (d >> 8) & 0xFF); return 0; }
+func pit_init(div) { let d = div; outb(0x43, 0x36); outb(0x40, d & 0xFF); outb(0x40, (d >> 8) & 0xFF); return 0; }
 
 func irq0_handler() { pit_ticks += 1; outb(0x20, 0x20); return 0; }
 
@@ -96,7 +93,7 @@ naked func irq0_isr() {
 
 func sys_dispatch(r) {
     let int* f = r;
-    let int nr = f[0];
+    let nr = f[0];
     if (nr == 0) { serial_putc(f[6]); return 0; }
     if (nr == 2) { serial_puts(f[6]); return 0; }
     if (nr == 1) {

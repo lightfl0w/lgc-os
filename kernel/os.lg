@@ -25,7 +25,7 @@ func main() {
     sti();
 
     let char* sp = usr_elf_image;
-    let int fsize = usrelf_bytes(sp);
+    let fsize = usrelf_bytes(sp);
     fs_create("init.elf", sp, fsize);
 
     sh_run();

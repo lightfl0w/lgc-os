@@ -10,19 +10,19 @@ let int heap_brk = 0;
 func heap_round8(n) { return (n + 7) & ~7; }
 
 func heap_hole_remove(i) {
-    let int j = i;
+    let j = i;
     while (j < heap_hole_n - 1) { heap_hole_off[j] = heap_hole_off[j + 1]; heap_hole_len[j] = heap_hole_len[j + 1]; j += 1; }
     heap_hole_n -= 1;
     return 0;
 }
 
 func heap_coalesce() {
-    let int changed = 1;
+    let changed = 1;
     while (changed != 0) {
         changed = 0;
-        let int a = 0;
+        let a = 0;
         while (a < heap_hole_n) {
-            let int b = 0;
+            let b = 0;
             while (b < heap_hole_n) {
                 if (a != b) { if (heap_hole_off[a] + heap_hole_len[a] == heap_hole_off[b]) { heap_hole_len[a] = heap_hole_len[a] + heap_hole_len[b]; heap_hole_remove(b); changed = 1; b = heap_hole_n; a = heap_hole_n; } }
                 b += 1;
@@ -34,23 +34,21 @@ func heap_coalesce() {
 }
 
 func heap_alloc(nbytes) {
-    let int need = heap_round8(nbytes);
+    let need = heap_round8(nbytes);
     if (need == 0) { need = 8; }
-    let int i = 0;
-    while (i < heap_hole_n) {
+    for i in 0..heap_hole_n {
         if (heap_hole_len[i] >= need) {
-            let int off = heap_hole_off[i]; heap_hole_off[i] = off + need; heap_hole_len[i] = heap_hole_len[i] - need;
+            let off = heap_hole_off[i]; heap_hole_off[i] = off + need; heap_hole_len[i] = heap_hole_len[i] - need;
             if (heap_hole_len[i] == 0) { heap_hole_remove(i); }
             return off;
         }
-        i += 1;
     }
-    if (heap_brk + need <= HEAP_ARENA_SIZE) { let int off = heap_brk; heap_brk = heap_brk + need; return off; }
+    if (heap_brk + need <= HEAP_ARENA_SIZE) { let off = heap_brk; heap_brk = heap_brk + need; return off; }
     return -1;
 }
 
 func heap_free(off, nbytes) {
-    let int size = heap_round8(nbytes);
+    let size = heap_round8(nbytes);
     if (heap_hole_n >= HEAP_MAX_HOLES) { return -1; }
     heap_hole_off[heap_hole_n] = off; heap_hole_len[heap_hole_n] = size; heap_hole_n += 1; heap_coalesce(); return 0;
 }

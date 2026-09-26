@@ -12,11 +12,11 @@ func fs_file_data(i) { return fs_data + i * FS_MAX_SIZE; }
 func fs_name_data(i) { return fs_names + i * 16; }
 
 func fs_name_eq(i, other) {
-    let int nd = fs_name_data(i);
+    let nd = fs_name_data(i);
     let int j = 0;
     while (1) {
-        let int a = mem_read8(nd, j);
-        let int c = mem_read8(other, j);
+        let a = mem_read8(nd, j);
+        let c = mem_read8(other, j);
         if (a != c) { return 0; }
         if (a == 0) { return 1; }
         j += 1;
@@ -25,53 +25,48 @@ func fs_name_eq(i, other) {
 }
 
 func fs_create(name, buf, len) {
-    let int slot = -1; let int i = 0;
+    let slot = -1; let i = 0;
     while (i < FS_MAX_FILES) { if (fs_used[i] == 0) { slot = i; i = FS_MAX_FILES; } i += 1; }
     if (slot < 0) { return -1; }
-    let int j = 0;
+    let j = 0;
     while (mem_read8(name, j) != 0) { mem_write8(fs_name_data(slot), j, mem_read8(name, j)); j += 1; }
     mem_write8(fs_name_data(slot), j, 0);
-    j = 0;
-    while (j < len) { mem_write8(fs_file_data(slot), j, mem_read8(buf, j)); j += 1; }
+    for j in 0..len { mem_write8(fs_file_data(slot), j, mem_read8(buf, j)); }
     fs_len[slot] = len;
     fs_used[slot] = 1;
     return slot;
 }
 
 func fs_open(name) {
-    let int i = 0;
-    while (i < FS_MAX_FILES) { if (fs_used[i] != 0) { if (fs_name_eq(i, name)) { return i; } } i += 1; }
+    for i in 0..FS_MAX_FILES { if (fs_used[i] != 0) { if (fs_name_eq(i, name)) { return i; } } }
     return -1;
 }
 
 func fs_size(i) { return fs_len[i]; }
 
 func fs_count() {
-    let int i = 0; let int c = 0;
-    while (i < FS_MAX_FILES) { if (fs_used[i] != 0) { c += 1; } i += 1; }
+    let c = 0;
+    for i in 0..FS_MAX_FILES { if (fs_used[i] != 0) { c += 1; } }
     return c;
 }
 
 func fs_read(i, dst, n) {
-    let int j = 0;
-    let int m = fs_len[i];
+    let m = fs_len[i];
     if (n < m) { m = n; }
-    while (j < m) { mem_write8(dst, j, mem_read8(fs_file_data(i), j)); j += 1; }
+    for j in 0..m { mem_write8(dst, j, mem_read8(fs_file_data(i), j)); }
     return m;
 }
 
 func fs_list() {
-    let int i = 0;
-    while (i < FS_MAX_FILES) {
+    for i in 0..FS_MAX_FILES {
         if (fs_used[i] != 0) {
             serial_puts("  ");
-            let int j = 0;
+            let j = 0;
             while (mem_read8(fs_name_data(i), j) != 0) { serial_putc(mem_read8(fs_name_data(i), j)); j += 1; }
             serial_puts("  (");
             serial_putn(fs_len[i]);
             serial_puts(" bytes)\n");
         }
-        i += 1;
     }
     return 0;
 }
