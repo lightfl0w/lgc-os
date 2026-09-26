@@ -41,9 +41,9 @@ def emit_lg(image, path):
         full = n - (n % 4)
         for i in range(0, full, 4):
             v = struct.unpack('<I', image[i:i+4])[0]
-            f.write('    b_p32(dst, %d, 0x%08x);\n' % (i, v))
+            f.write('    mem_write32(dst, %d, 0x%08x);\n' % (i, v))
         for i in range(full, n):
-            f.write('    b_set(dst, %d, %d);\n' % (i, image[i]))
+            f.write('    mem_write8(dst, %d, %d);\n' % (i, image[i]))
         f.write('    return %d;\n}\n' % n)
 
 if __name__ == '__main__':

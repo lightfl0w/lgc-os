@@ -1,15 +1,13 @@
 @import "vga.lg";
 
-const COM1 = 0x3F8;
-
 func serial_putc(ch) {
-    outb(COM1, ch);
+    outb(SERIAL_COM1, ch);
     vga_putc(ch);
     return 0;
 }
 func serial_getc() {
-    while ((inb(0x3FD) & 1) == 0) { }
-    return inb(COM1);
+    while ((inb(SERIAL_LSR) & 1) == 0) { }
+    return inb(SERIAL_COM1);
 }
 func serial_puts(a) { let char* s = a; let int i = 0; while (s[i] != 0) { serial_putc(s[i]); i += 1; } return 0; }
 func serial_putn(n) {
@@ -26,11 +24,11 @@ func serial_puthex(v) {
     return 0;
 }
 
-func b_set(base, off, v) { let char* p = base; p[off] = v; return 0; }
-func b_get(base, off) { let char* p = base; return p[off] & 255; }
-func b_g16(base, off) { return b_get(base, off) | (b_get(base, off + 1) << 8); }
-func b_g32(base, off) { let int v = 0; let int i = 0; while (i < 4) { v = v | (b_get(base, off + i) << (i * 8)); i += 1; } return v; }
-func b_g64(base, off) { let int v = 0; let int i = 0; while (i < 8) { v = v | (b_get(base, off + i) << (i * 8)); i += 1; } return v; }
-func b_p16(base, off, v) { b_set(base, off, v); b_set(base, off + 1, v >> 8); return 0; }
-func b_p32(base, off, v) { let int i = 0; while (i < 4) { b_set(base, off + i, v >> (i * 8)); i += 1; } return 0; }
-func b_p64(base, off, v) { let int i = 0; while (i < 8) { b_set(base, off + i, v >> (i * 8)); i += 1; } return 0; }
+func mem_write8(base, off, v) { let char* p = base; p[off] = v; return 0; }
+func mem_read8(base, off) { let char* p = base; return p[off] & 255; }
+func mem_read16(base, off) { return mem_read8(base, off) | (mem_read8(base, off + 1) << 8); }
+func mem_read32(base, off) { let int v = 0; let int i = 0; while (i < 4) { v = v | (mem_read8(base, off + i) << (i * 8)); i += 1; } return v; }
+func mem_read64(base, off) { let int v = 0; let int i = 0; while (i < 8) { v = v | (mem_read8(base, off + i) << (i * 8)); i += 1; } return v; }
+func mem_write16(base, off, v) { mem_write8(base, off, v); mem_write8(base, off + 1, v >> 8); return 0; }
+func mem_write32(base, off, v) { let int i = 0; while (i < 4) { mem_write8(base, off + i, v >> (i * 8)); i += 1; } return 0; }
+func mem_write64(base, off, v) { let int i = 0; while (i < 8) { mem_write8(base, off + i, v >> (i * 8)); i += 1; } return 0; }

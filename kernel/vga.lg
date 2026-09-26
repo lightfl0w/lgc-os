@@ -1,45 +1,45 @@
-const VID = 0xB8000;
-const COLS = 80;
-const ROWS = 25;
-const CUR = 0x170000;
+const VGA_MEM = 0xB8000;
+const VGA_COLS = 80;
+const VGA_ROWS = 25;
+const VGA_CURSOR_ADDR = 0x170000;
 
-const COMPORT = 0x3F8;
-const LSR = 0x3FD;
-const KBD_DATA = 0x60;
-const KBD_STAT = 0x64;
+const SERIAL_COM1 = 0x3F8;
+const SERIAL_LSR = 0x3FD;
+const KBD_DATA_PORT = 0x60;
+const KBD_STATUS_PORT = 0x64;
 
-let char kmap[128];
-let int shift = 0;
+let char kbd_map[128];
+let int kbd_shift = 0;
 
 func kbd_init() {
     let int i = 0;
-    while (i < 128) { kmap[i] = 0; i += 1; }
-    kmap[0x1C] = 10;
-    kmap[0x0E] = 8;
-    kmap[0x39] = ' ';
-    kmap[0x02] = '1'; kmap[0x03] = '2'; kmap[0x04] = '3'; kmap[0x05] = '4'; kmap[0x06] = '5';
-    kmap[0x07] = '6'; kmap[0x08] = '7'; kmap[0x09] = '8'; kmap[0x0A] = '9'; kmap[0x0B] = '0';
-    kmap[0x29] = '`'; kmap[0x0C] = '-'; kmap[0x0D] = '='; kmap[0x1A] = '['; kmap[0x1B] = ']';
-    kmap[0x2B] = 92; kmap[0x27] = ';'; kmap[0x28] = 39; kmap[0x33] = ','; kmap[0x34] = '.';
-    kmap[0x35] = '/';
-    kmap[0x1E] = 'a'; kmap[0x30] = 'b'; kmap[0x2E] = 'c'; kmap[0x20] = 'd'; kmap[0x12] = 'e';
-    kmap[0x21] = 'f'; kmap[0x22] = 'g'; kmap[0x23] = 'h'; kmap[0x17] = 'i'; kmap[0x24] = 'j';
-    kmap[0x25] = 'k'; kmap[0x26] = 'l'; kmap[0x32] = 'm'; kmap[0x31] = 'n'; kmap[0x18] = 'o';
-    kmap[0x19] = 'p'; kmap[0x10] = 'q'; kmap[0x13] = 'r'; kmap[0x1F] = 's'; kmap[0x14] = 't';
-    kmap[0x16] = 'u'; kmap[0x2F] = 'v'; kmap[0x11] = 'w'; kmap[0x2D] = 'x'; kmap[0x15] = 'y';
-    kmap[0x2C] = 'z';
+    while (i < 128) { kbd_map[i] = 0; i += 1; }
+    kbd_map[0x1C] = 10;
+    kbd_map[0x0E] = 8;
+    kbd_map[0x39] = ' ';
+    kbd_map[0x02] = '1'; kbd_map[0x03] = '2'; kbd_map[0x04] = '3'; kbd_map[0x05] = '4'; kbd_map[0x06] = '5';
+    kbd_map[0x07] = '6'; kbd_map[0x08] = '7'; kbd_map[0x09] = '8'; kbd_map[0x0A] = '9'; kbd_map[0x0B] = '0';
+    kbd_map[0x29] = '`'; kbd_map[0x0C] = '-'; kbd_map[0x0D] = '='; kbd_map[0x1A] = '['; kbd_map[0x1B] = ']';
+    kbd_map[0x2B] = 92; kbd_map[0x27] = ';'; kbd_map[0x28] = 39; kbd_map[0x33] = ','; kbd_map[0x34] = '.';
+    kbd_map[0x35] = '/';
+    kbd_map[0x1E] = 'a'; kbd_map[0x30] = 'b'; kbd_map[0x2E] = 'c'; kbd_map[0x20] = 'd'; kbd_map[0x12] = 'e';
+    kbd_map[0x21] = 'f'; kbd_map[0x22] = 'g'; kbd_map[0x23] = 'h'; kbd_map[0x17] = 'i'; kbd_map[0x24] = 'j';
+    kbd_map[0x25] = 'k'; kbd_map[0x26] = 'l'; kbd_map[0x32] = 'm'; kbd_map[0x31] = 'n'; kbd_map[0x18] = 'o';
+    kbd_map[0x19] = 'p'; kbd_map[0x10] = 'q'; kbd_map[0x13] = 'r'; kbd_map[0x1F] = 's'; kbd_map[0x14] = 't';
+    kbd_map[0x16] = 'u'; kbd_map[0x2F] = 'v'; kbd_map[0x11] = 'w'; kbd_map[0x2D] = 'x'; kbd_map[0x15] = 'y';
+    kbd_map[0x2C] = 'z';
     return 0;
 }
 
 func kbd_decode(sc) {
-    if (sc == 0x2A) { shift = 1; return 0; }
-    if (sc == 0x36) { shift = 1; return 0; }
-    if (sc == 0xAA) { shift = 0; return 0; }
-    if (sc == 0xB6) { shift = 0; return 0; }
+    if (sc == 0x2A) { kbd_shift = 1; return 0; }
+    if (sc == 0x36) { kbd_shift = 1; return 0; }
+    if (sc == 0xAA) { kbd_shift = 0; return 0; }
+    if (sc == 0xB6) { kbd_shift = 0; return 0; }
     if ((sc & 0x80) != 0) { return 0; }
-    let int c = kmap[sc];
+    let int c = kbd_map[sc];
     if (c == 0) { return 0; }
-    if (shift != 0) {
+    if (kbd_shift != 0) {
         if (c >= 'a' && c <= 'z') { c = c - 32; }
     }
     return c;
@@ -47,9 +47,9 @@ func kbd_decode(sc) {
 
 func console_getc() {
     while (1) {
-        if ((inb(LSR) & 1) != 0) { return inb(COMPORT); }
-        if ((inb(KBD_STAT) & 1) != 0) {
-            let int r = kbd_decode(inb(KBD_DATA));
+        if ((inb(SERIAL_LSR) & 1) != 0) { return inb(SERIAL_COM1); }
+        if ((inb(KBD_STATUS_PORT) & 1) != 0) {
+            let int r = kbd_decode(inb(KBD_DATA_PORT));
             if (r != 0) { return r; }
         }
     }
@@ -57,12 +57,12 @@ func console_getc() {
 }
 
 func vga_scroll() {
-    let char* v = VID;
-    let int n = (ROWS - 1) * COLS * 2;
+    let char* v = VGA_MEM;
+    let int n = (VGA_ROWS - 1) * VGA_COLS * 2;
     let int i = 0;
-    while (i < n) { v[i] = v[i + COLS * 2]; i += 1; }
-    let int j = (ROWS - 1) * COLS;
-    while (j < ROWS * COLS) { v[j * 2] = ' '; v[j * 2 + 1] = 0x07; j += 1; }
+    while (i < n) { v[i] = v[i + VGA_COLS * 2]; i += 1; }
+    let int j = (VGA_ROWS - 1) * VGA_COLS;
+    while (j < VGA_ROWS * VGA_COLS) { v[j * 2] = ' '; v[j * 2 + 1] = 0x07; j += 1; }
     return 0;
 }
 
@@ -73,31 +73,31 @@ func vga_cursor(idx) {
 }
 
 func vga_putc(ch) {
-    let char* v = VID;
-    let int* cp = CUR;
+    let char* v = VGA_MEM;
+    let int* cp = VGA_CURSOR_ADDR;
     let int idx = cp[0];
     if (ch == 10) {
-        idx = (idx / COLS + 1) * COLS;
+        idx = (idx / VGA_COLS + 1) * VGA_COLS;
     } else if (ch == 8) {
-        if (idx % COLS > 0) { idx -= 1; v[idx * 2] = ' '; v[idx * 2 + 1] = 0x07; }
+        if (idx % VGA_COLS > 0) { idx -= 1; v[idx * 2] = ' '; v[idx * 2 + 1] = 0x07; }
     } else if (ch == 9) {
         idx = (idx + 8) & ~7;
-        if (idx % COLS >= COLS) { idx = (idx / COLS) * COLS; }
+        if (idx % VGA_COLS >= VGA_COLS) { idx = (idx / VGA_COLS) * VGA_COLS; }
     } else if (ch >= 32 && ch < 127) {
         v[idx * 2] = ch; v[idx * 2 + 1] = 0x07;
         idx += 1;
     }
-    if (idx >= ROWS * COLS) { vga_scroll(); idx = (ROWS - 1) * COLS; }
+    if (idx >= VGA_ROWS * VGA_COLS) { vga_scroll(); idx = (VGA_ROWS - 1) * VGA_COLS; }
     cp[0] = idx;
     vga_cursor(idx);
     return 0;
 }
 
 func vga_clear() {
-    let char* v = VID;
+    let char* v = VGA_MEM;
     let int i = 0;
-    while (i < ROWS * COLS) { v[i * 2] = ' '; v[i * 2 + 1] = 0x07; i += 1; }
-    let int* cp = CUR;
+    while (i < VGA_ROWS * VGA_COLS) { v[i * 2] = ' '; v[i * 2 + 1] = 0x07; i += 1; }
+    let int* cp = VGA_CURSOR_ADDR;
     cp[0] = 0;
     vga_cursor(0);
     return 0;

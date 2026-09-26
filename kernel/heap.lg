@@ -1,29 +1,30 @@
-const ARENA = 1024;
+const HEAP_ARENA_SIZE = 1024;
+const HEAP_MAX_HOLES = 16;
 
-let char arena[1024];
-let int hof[16];
-let int hln[16];
-let int nhole = 0;
-let int brk = 0;
+let char heap_arena[1024];
+let int heap_hole_off[16];
+let int heap_hole_len[16];
+let int heap_hole_n = 0;
+let int heap_brk = 0;
 
-func round8(n) { return (n + 7) & ~7; }
+func heap_round8(n) { return (n + 7) & ~7; }
 
-func hole_remove(i) {
+func heap_hole_remove(i) {
     let int j = i;
-    while (j < nhole - 1) { hof[j] = hof[j + 1]; hln[j] = hln[j + 1]; j += 1; }
-    nhole -= 1;
+    while (j < heap_hole_n - 1) { heap_hole_off[j] = heap_hole_off[j + 1]; heap_hole_len[j] = heap_hole_len[j + 1]; j += 1; }
+    heap_hole_n -= 1;
     return 0;
 }
 
-func coalesce() {
+func heap_coalesce() {
     let int changed = 1;
     while (changed != 0) {
         changed = 0;
         let int a = 0;
-        while (a < nhole) {
+        while (a < heap_hole_n) {
             let int b = 0;
-            while (b < nhole) {
-                if (a != b) { if (hof[a] + hln[a] == hof[b]) { hln[a] = hln[a] + hln[b]; hole_remove(b); changed = 1; b = nhole; a = nhole; } }
+            while (b < heap_hole_n) {
+                if (a != b) { if (heap_hole_off[a] + heap_hole_len[a] == heap_hole_off[b]) { heap_hole_len[a] = heap_hole_len[a] + heap_hole_len[b]; heap_hole_remove(b); changed = 1; b = heap_hole_n; a = heap_hole_n; } }
                 b += 1;
             }
             a += 1;
@@ -33,23 +34,23 @@ func coalesce() {
 }
 
 func heap_alloc(nbytes) {
-    let int need = round8(nbytes);
+    let int need = heap_round8(nbytes);
     if (need == 0) { need = 8; }
     let int i = 0;
-    while (i < nhole) {
-        if (hln[i] >= need) {
-            let int off = hof[i]; hof[i] = off + need; hln[i] = hln[i] - need;
-            if (hln[i] == 0) { hole_remove(i); }
+    while (i < heap_hole_n) {
+        if (heap_hole_len[i] >= need) {
+            let int off = heap_hole_off[i]; heap_hole_off[i] = off + need; heap_hole_len[i] = heap_hole_len[i] - need;
+            if (heap_hole_len[i] == 0) { heap_hole_remove(i); }
             return off;
         }
         i += 1;
     }
-    if (brk + need <= ARENA) { let int off = brk; brk = brk + need; return off; }
+    if (heap_brk + need <= HEAP_ARENA_SIZE) { let int off = heap_brk; heap_brk = heap_brk + need; return off; }
     return -1;
 }
 
 func heap_free(off, nbytes) {
-    let int size = round8(nbytes);
-    if (nhole >= 16) { return -1; }
-    hof[nhole] = off; hln[nhole] = size; nhole += 1; coalesce(); return 0;
+    let int size = heap_round8(nbytes);
+    if (heap_hole_n >= HEAP_MAX_HOLES) { return -1; }
+    heap_hole_off[heap_hole_n] = off; heap_hole_len[heap_hole_n] = size; heap_hole_n += 1; heap_coalesce(); return 0;
 }

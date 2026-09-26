@@ -1,22 +1,22 @@
 @import "io.lg";
 
-const NFILE = 4;
-const FMAX = 512;
+const FS_MAX_FILES = 4;
+const FS_MAX_SIZE = 512;
 
-let char fdata[2048];
-let char fnames[64];
-let int fuse[4];
-let int flen[4];
+let char fs_data[2048];
+let char fs_names[64];
+let int fs_used[4];
+let int fs_len[4];
 
-func file_data(i) { return fdata + i * FMAX; }
-func name_data(i) { return fnames + i * 16; }
+func fs_file_data(i) { return fs_data + i * FS_MAX_SIZE; }
+func fs_name_data(i) { return fs_names + i * 16; }
 
-func name_eq(i, other) {
-    let int nd = name_data(i);
+func fs_name_eq(i, other) {
+    let int nd = fs_name_data(i);
     let int j = 0;
     while (1) {
-        let int a = b_get(nd, j);
-        let int c = b_get(other, j);
+        let int a = mem_read8(nd, j);
+        let int c = mem_read8(other, j);
         if (a != c) { return 0; }
         if (a == 0) { return 1; }
         j += 1;
@@ -26,49 +26,49 @@ func name_eq(i, other) {
 
 func fs_create(name, buf, len) {
     let int slot = -1; let int i = 0;
-    while (i < NFILE) { if (fuse[i] == 0) { slot = i; i = NFILE; } i += 1; }
+    while (i < FS_MAX_FILES) { if (fs_used[i] == 0) { slot = i; i = FS_MAX_FILES; } i += 1; }
     if (slot < 0) { return -1; }
     let int j = 0;
-    while (b_get(name, j) != 0) { b_set(name_data(slot), j, b_get(name, j)); j += 1; }
-    b_set(name_data(slot), j, 0);
+    while (mem_read8(name, j) != 0) { mem_write8(fs_name_data(slot), j, mem_read8(name, j)); j += 1; }
+    mem_write8(fs_name_data(slot), j, 0);
     j = 0;
-    while (j < len) { b_set(file_data(slot), j, b_get(buf, j)); j += 1; }
-    flen[slot] = len;
-    fuse[slot] = 1;
+    while (j < len) { mem_write8(fs_file_data(slot), j, mem_read8(buf, j)); j += 1; }
+    fs_len[slot] = len;
+    fs_used[slot] = 1;
     return slot;
 }
 
 func fs_open(name) {
     let int i = 0;
-    while (i < NFILE) { if (fuse[i] != 0) { if (name_eq(i, name)) { return i; } } i += 1; }
+    while (i < FS_MAX_FILES) { if (fs_used[i] != 0) { if (fs_name_eq(i, name)) { return i; } } i += 1; }
     return -1;
 }
 
-func fs_size(i) { return flen[i]; }
+func fs_size(i) { return fs_len[i]; }
 
 func fs_count() {
     let int i = 0; let int c = 0;
-    while (i < NFILE) { if (fuse[i] != 0) { c += 1; } i += 1; }
+    while (i < FS_MAX_FILES) { if (fs_used[i] != 0) { c += 1; } i += 1; }
     return c;
 }
 
 func fs_read(i, dst, n) {
     let int j = 0;
-    let int m = flen[i];
+    let int m = fs_len[i];
     if (n < m) { m = n; }
-    while (j < m) { b_set(dst, j, b_get(file_data(i), j)); j += 1; }
+    while (j < m) { mem_write8(dst, j, mem_read8(fs_file_data(i), j)); j += 1; }
     return m;
 }
 
-func vfs_ls() {
+func fs_list() {
     let int i = 0;
-    while (i < NFILE) {
-        if (fuse[i] != 0) {
+    while (i < FS_MAX_FILES) {
+        if (fs_used[i] != 0) {
             serial_puts("  ");
             let int j = 0;
-            while (b_get(name_data(i), j) != 0) { serial_putc(b_get(name_data(i), j)); j += 1; }
+            while (mem_read8(fs_name_data(i), j) != 0) { serial_putc(mem_read8(fs_name_data(i), j)); j += 1; }
             serial_puts("  (");
-            serial_putn(flen[i]);
+            serial_putn(fs_len[i]);
             serial_puts(" bytes)\n");
         }
         i += 1;
