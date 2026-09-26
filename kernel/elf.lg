@@ -5,6 +5,7 @@ func elf_load(image) {
     let phoff = mem_read64(image, 32);
     let phes = mem_read16(image, 54);
     let phnum = mem_read16(image, 56);
+    pt_user_code_w(1);
     for i in 0..phnum {
         let base = phoff + i * phes;
         if (mem_read32(image, base) == 1) {
@@ -17,5 +18,6 @@ func elf_load(image) {
             for j in fsz..msz { dst[j] = 0; }
         }
     }
+    pt_user_code_w(0);
     return entry;
 }

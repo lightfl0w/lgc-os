@@ -4,6 +4,8 @@ const IDTR_BASE = 0x121000;
 const PG_PML4 = 0x1000;
 const PG_PDPT = 0x2000;
 const PG_PD = 0x3000;
+const PG_PT = 0x4000;
+const BOOT_INFO = 0x5000;
 const GDT_BASE = 0x140000;
 const TSS_BASE = 0x141000;
 const GDTR_BASE = 0x142000;
@@ -58,6 +60,36 @@ func paging_mark_user() {
     pml4[0] = pml4[0] | 0x04;
     pdpt[0] = pdpt[0] | 0x04;
     pd[0] = pd[0] | 0x04;
+    setcr3(PG_PML4);
+    return 0;
+}
+
+func paging_wx() {
+    let int* pml4 = PG_PML4;
+    let int* pdpt = PG_PDPT;
+    let int* pd = PG_PD;
+    let int* pt = PG_PT;
+    for i in 0..512 { pt[i] = (i << 12) | 0x8000000000000003; }
+    let int kend = mem_read32(BOOT_INFO, 0);
+    if ((kend <= 0x100000) || (kend > 0x120000)) { kend = 0x120000; }
+    let kn = (kend - 0x100000) >> 12;
+    for k in 0..kn {
+        let int idx = 0x100 + k;
+        pt[idx] = (idx << 12) | 1;
+    }
+    pt[0x180] = (0x180 << 12) | 5;
+    for j in 0x181..0x1B0 { pt[j] = (j << 12) | 0x8000000000000007; }
+    pd[0] = 0x4007;
+    pml4[0] = pml4[0] | 0x04;
+    pdpt[0] = pdpt[0] | 0x04;
+    asm(0x0F, 0x20, 0xC0, 0x0D, 0x00, 0x00, 0x01, 0x00, 0x0F, 0x22, 0xC0);
+    setcr3(PG_PML4);
+    return 0;
+}
+
+func pt_user_code_w(on) {
+    let int* pt = PG_PT;
+    if (on != 0) { pt[0x180] = (0x180 << 12) | 7; } else { pt[0x180] = (0x180 << 12) | 5; }
     setcr3(PG_PML4);
     return 0;
 }
