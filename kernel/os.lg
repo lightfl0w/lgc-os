@@ -13,7 +13,7 @@ func main() {
     mm_init();
     serial_puts("lgc-os booting: gdt/idt/paging/wx/pic/pit...\n");
     gdt_init();
-    idt_set_gate(0x80, addr(syscall_isr), 3);
+    idt_set_gate(0x30, addr(sched_isr), 3);
     idt_set_gate(32, addr(irq0_isr), 0);
     idt_set_gate(13, addr(fault_gp), 0);
     idt_set_gate(14, addr(fault_pf), 0);
@@ -32,6 +32,7 @@ func main() {
     syscall_init();
     pic_init();
     pit_init(1193);
+    proc_init();
     sti();
 
     userfs_init();

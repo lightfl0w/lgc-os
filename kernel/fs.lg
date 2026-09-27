@@ -1,17 +1,17 @@
 @import "io.lg";
 @import "ata.lg";
 
-const FS_MAX_FILES = 20;
+const FS_MAX_FILES = 32;
 const FS_MAX_SIZE = 0x100000;
 const FS_NAME_LEN = 32;
 
 const FS_SCRATCH_BASE = 0x6000000;
 const FS_SCRATCH_LIMIT = 0x8000000;
 
-let char fs_names[640];
-let int fs_used[20];
-let int fs_len[20];
-let int fs_addr[20];
+let char fs_names[1024];
+let int fs_used[32];
+let int fs_len[32];
+let int fs_addr[32];
 let int fs_bump = FS_SCRATCH_BASE;
 
 func fs_file_data(i) { return fs_addr[i]; }

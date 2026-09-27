@@ -156,40 +156,296 @@ func pit_init(div) { let d = div; outb(0x43, 0x36); outb(0x40, d & 0xFF); outb(0
 
 func irq0_handler() { pit_ticks += 1; outb(0x20, 0x20); return 0; }
 
-naked func irq0_isr() {
-    asm(0x50,0x51,0x52,0x53,0x55,0x56,0x57,0x41,0x50,0x41,0x51,0x41,0x52,0x41,0x53,0x41,0x54,0x41,0x55,0x41,0x56,0x41,0x57);
-    irq0_handler();
-    asm(0x41,0x5f,0x41,0x5e,0x41,0x5d,0x41,0x5c,0x41,0x5b,0x41,0x5a,0x41,0x59,0x41,0x58,0x5f,0x5e,0x5d,0x5b,0x5a,0x59,0x58,0x48,0xcf);
-}
+const MAXPROC = 8;
+const KSTACK_BASE = 0x2000000;
+const TR_SIZE = 160;
+const ST_FREE = 0;
+const ST_READY = 1;
+const ST_RUN = 2;
+const ST_ZOMBIE = 3;
+const TSS_RSP0 = 0x141004;
 
-func sys_dispatch(r) {
-    let int* f = r;
-    let nr = f[0];
-    if (nr == 0) { serial_putc(f[6]); return 0; }
-    if (nr == 2) { serial_puts(f[6]); return 0; }
-    if (nr == 1) {
-        user_exit_code = f[6];
-        let int* c = RING0_CTX;
-        c[0] = addr(sh_resume);
-        c[1] = RING0_RSP;
-        return 1;
-    }
-    f[0] = -1;
+const SYS_KSTACK = 0x160300;
+const SYS_RESUME = 0x160308;
+const FR_IN = 0x160310;
+const FR_OUT = 0x160318;
+
+const TQ_RAX = 14;
+const TQ_RIP = 15;
+const TQ_CS = 16;
+const TQ_RFLAGS = 17;
+const TQ_RSP = 18;
+const TQ_SS = 19;
+
+let int cur_proc = 0;
+let int next_pid = 1;
+let int proc_state[8];
+let int proc_pid[8];
+let int proc_cr3[8];
+let int proc_krsp[8];
+let int proc_kstack[8];
+let int proc_parent[8];
+let int proc_exitc[8];
+let int proc_ticks[8];
+let int proc_brk[8];
+let int proc_mmap[8];
+let int proc_fsbase[8];
+let int proc_pmid[8];
+let int proc_rng[8];
+let int proc_ursp[8];
+let int p_fd_kind[128];
+let int p_fd_slot[128];
+let int p_fd_pos[128];
+let int p_sysctx[128];
+
+naked func intr_off() { asm(0xFA, 0xC3); }
+naked func intr_on() { asm(0xFB, 0xC3); }
+
+func kstack_top(p) { return KSTACK_BASE + ((p + 1) << 13); }
+
+func proc_set_fsbase(v) {
+    mem_write64(MSR_SCRATCH, 0, v);
+    msr_set_fs();
     return 0;
 }
 
-naked func syscall_isr() {
-    asm(0x41,0x57, 0x41,0x56, 0x41,0x55, 0x41,0x54, 0x41,0x53, 0x41,0x52, 0x41,0x51, 0x41,0x50,
-        0x57, 0x56, 0x55, 0x53, 0x52, 0x51, 0x50);
-    sys_dispatch(TRAP_FRAME);
-    asm(0x48,0x85,0xC0, 0x75,0x19,
-        0x58, 0x59, 0x5A, 0x5B, 0x5D, 0x5E, 0x5F,
-        0x41,0x58, 0x41,0x59, 0x41,0x5A, 0x41,0x5B, 0x41,0x5C, 0x41,0x5D, 0x41,0x5E, 0x41,0x5F,
-        0x48,0xCF,
-        0x48,0xA1, 0xF8,0x0F,0x15,0x00,0x00,0x00,0x00,0x00,
-        0x48,0x89,0xC4,
-        0x48,0xA1, 0xF0,0x0F,0x15,0x00,0x00,0x00,0x00,0x00,
-        0xFF,0xE0);
+func save_globs(p) {
+    proc_brk[p] = u_brk;
+    proc_mmap[p] = u_mmap_next;
+    proc_fsbase[p] = u_fs_base;
+    proc_pmid[p] = cur_pmid;
+    proc_rng[p] = rng_state;
+    proc_ursp[p] = mem_read64(SYS_RSP, 0);
+    let i = 0;
+    while (i < 16) {
+        p_fd_kind[p * 16 + i] = fd_kind[i];
+        p_fd_slot[p * 16 + i] = fd_slot[i];
+        p_fd_pos[p * 16 + i] = fd_pos[i];
+        p_sysctx[p * 16 + i] = mem_read64(SYSCTX, i * 8);
+        i += 1;
+    }
+    return 0;
+}
+
+func load_globs(p) {
+    u_brk = proc_brk[p];
+    u_mmap_next = proc_mmap[p];
+    u_fs_base = proc_fsbase[p];
+    cur_pmid = proc_pmid[p];
+    rng_state = proc_rng[p];
+    mem_write64(SYS_RSP, 0, proc_ursp[p]);
+    let i = 0;
+    while (i < 16) {
+        fd_kind[i] = p_fd_kind[p * 16 + i];
+        fd_slot[i] = p_fd_slot[p * 16 + i];
+        fd_pos[i]  = p_fd_pos[p * 16 + i];
+        mem_write64(SYSCTX, i * 8, p_sysctx[p * 16 + i]);
+        i += 1;
+    }
+    return 0;
+}
+
+func proc_init() {
+    let i = 0;
+    while (i < 8) {
+        proc_state[i] = ST_FREE;
+        proc_pid[i] = 0;
+        proc_cr3[i] = 0;
+        proc_krsp[i] = 0;
+        proc_kstack[i] = kstack_top(i);
+        proc_parent[i] = 0;
+        proc_exitc[i] = 0;
+        proc_ticks[i] = 0;
+        i += 1;
+    }
+    cur_proc = 0;
+    proc_state[0] = ST_RUN;
+    proc_pid[0] = 0;
+    proc_cr3[0] = PG_PML4;
+    save_globs(0);
+    mem_write64(TSS_RSP0, 0, proc_kstack[0]);
+    mem_write64(SYS_KSTACK, 0, proc_kstack[0]);
+    return 0;
+}
+
+func proc_make_frame(p, entry, sp) {
+    let fr = proc_kstack[p] - TR_SIZE;
+    let i = 0;
+    while (i < 15) { mem_write64(fr, i * 8, 0); i += 1; }
+    mem_write64(fr, TQ_RIP * 8, entry);
+    mem_write64(fr, TQ_CS * 8, SEL_UCODE);
+    mem_write64(fr, TQ_RFLAGS * 8, 0x202);
+    mem_write64(fr, TQ_RSP * 8, sp);
+    mem_write64(fr, TQ_SS * 8, SEL_UDATA);
+    proc_krsp[p] = fr;
+    return 0;
+}
+
+func proc_alloc() {
+    let i = 1;
+    while (i < MAXPROC) {
+        if (proc_state[i] == ST_FREE) { return i; }
+        i += 1;
+    }
+    return -1;
+}
+
+func proc_spawn(entry, sp, pmid) {
+    let p = proc_alloc();
+    if (p < 0) { return -1; }
+    proc_cr3[p] = pmid;
+    proc_kstack[p] = kstack_top(p);
+    proc_parent[p] = 0;
+    proc_exitc[p] = 0;
+    proc_ticks[p] = 0;
+    save_globs(p);
+    proc_make_frame(p, entry, sp);
+    proc_pid[p] = next_pid;
+    next_pid += 1;
+    proc_state[p] = ST_READY;
+    cur_proc = 0;
+    load_globs(0);
+    setcr3(proc_cr3[0]);
+    mem_write64(TSS_RSP0, 0, proc_kstack[0]);
+    mem_write64(SYS_KSTACK, 0, proc_kstack[0]);
+    proc_set_fsbase(proc_fsbase[0]);
+    return p;
+}
+
+func pick_next(from) {
+    let k = 1;
+    while (k <= MAXPROC) {
+        let i = from + k;
+        if (i >= MAXPROC) { i = i - MAXPROC; }
+        if (proc_state[i] == ST_READY) { return i; }
+        k += 1;
+    }
+    return -1;
+}
+
+func sched_switch_to(nxt) {
+    cur_proc = nxt;
+    proc_state[nxt] = ST_RUN;
+    proc_ticks[nxt] += 1;
+    load_globs(nxt);
+    setcr3(proc_cr3[nxt]);
+    mem_write64(TSS_RSP0, 0, proc_kstack[nxt]);
+    mem_write64(SYS_KSTACK, 0, proc_kstack[nxt]);
+    proc_set_fsbase(proc_fsbase[nxt]);
+    return proc_krsp[nxt];
+}
+
+func sched_irq(fr) {
+    let cur = cur_proc;
+    if (proc_state[cur] != ST_RUN) { return fr; }
+    proc_krsp[cur] = fr;
+    save_globs(cur);
+    proc_state[cur] = ST_READY;
+    let nxt = pick_next(cur);
+    if (nxt < 0) { proc_state[cur] = ST_RUN; return proc_krsp[cur]; }
+    return sched_switch_to(nxt);
+}
+
+func sched_exit() {
+    let nxt = pick_next(cur_proc);
+    if (nxt < 0) { nxt = 0; }
+    return sched_switch_to(nxt);
+}
+
+func irq0_dispatch() {
+    pit_ticks += 1;
+    outb(0x20, 0x20);
+    let nf = sched_irq(mem_read64(FR_IN, 0));
+    mem_write64(FR_OUT, 0, nf);
+    return 0;
+}
+
+naked func irq0_isr() {
+    asm(
+        0x50, 0x51, 0x52, 0x53, 0x55, 0x56, 0x57,
+        0x41,0x50, 0x41,0x51, 0x41,0x52, 0x41,0x53,
+        0x41,0x54, 0x41,0x55, 0x41,0x56, 0x41,0x57,
+        0x48,0x89,0x24,0x25, 0x10,0x03,0x16,0x00);
+    irq0_dispatch();
+    asm(
+        0x48,0x8B,0x24,0x25, 0x18,0x03,0x16,0x00,
+        0x41,0x5f, 0x41,0x5e, 0x41,0x5d, 0x41,0x5c,
+        0x41,0x5b, 0x41,0x5a, 0x41,0x59, 0x41,0x58,
+        0x5f, 0x5e, 0x5d, 0x5b, 0x5a, 0x59, 0x58,
+        0x48,0xCF);
+}
+
+func sched_yield_handler() {
+    let nf = sched_irq(mem_read64(FR_IN, 0));
+    mem_write64(FR_OUT, 0, nf);
+    return 0;
+}
+
+naked func sched_isr() {
+    asm(
+        0x50, 0x51, 0x52, 0x53, 0x55, 0x56, 0x57,
+        0x41,0x50, 0x41,0x51, 0x41,0x52, 0x41,0x53,
+        0x41,0x54, 0x41,0x55, 0x41,0x56, 0x41,0x57,
+        0x48,0x89,0x24,0x25, 0x10,0x03,0x16,0x00);
+    sched_yield_handler();
+    asm(
+        0x48,0x8B,0x24,0x25, 0x18,0x03,0x16,0x00,
+        0x41,0x5f, 0x41,0x5e, 0x41,0x5d, 0x41,0x5c,
+        0x41,0x5b, 0x41,0x5a, 0x41,0x59, 0x41,0x58,
+        0x5f, 0x5e, 0x5d, 0x5b, 0x5a, 0x59, 0x58,
+        0x48,0xCF);
+}
+
+naked func proc_yield() { asm(0xCD, 0x30, 0xC3); }
+
+func proc_wait(p) {
+    let go = 1;
+    while (go != 0) {
+        if (proc_state[p] == ST_ZOMBIE) { go = 0; }
+        else if (proc_state[p] == ST_FREE) { go = 0; }
+        else { proc_yield(); }
+    }
+    return proc_exitc[p];
+}
+
+func proc_reap(p) {
+    if (p <= 0) { return 0; }
+    if (proc_state[p] == ST_ZOMBIE) {
+        proc_state[p] = ST_FREE;
+        proc_pid[p] = 0;
+        proc_cr3[p] = 0;
+        proc_krsp[p] = 0;
+        proc_exitc[p] = 0;
+        proc_ticks[p] = 0;
+    }
+    return 0;
+}
+
+func proc_reap_all() {
+    let i = 1;
+    while (i < MAXPROC) {
+        if (proc_state[i] == ST_ZOMBIE) {
+            serial_puts("[pid "); serial_putn(proc_pid[i]);
+            serial_puts("] exit="); serial_putn(proc_exitc[i]); serial_putc('\n');
+            proc_reap(i);
+        }
+        i += 1;
+    }
+    return 0;
+}
+
+func proc_ps() {
+    serial_puts("pid state ticks\n");
+    let i = 0;
+    while (i < MAXPROC) {
+        if (proc_state[i] != ST_FREE) {
+            serial_putn(proc_pid[i]); serial_putc(' ');
+            serial_putn(proc_state[i]); serial_putc(' ');
+            serial_putn(proc_ticks[i]); serial_putc('\n');
+        }
+        i += 1;
+    }
+    return 0;
 }
 
 func syscall_init() {
@@ -222,7 +478,7 @@ naked func syscall_msr_setup() {
 naked func syscall_entry() {
     asm(
         0x48,0x89,0x24,0x25, 0x00,0x02,0x16,0x00,
-        0x48,0xBC, 0x00,0x00,0x15,0x00,0x00,0x00,0x00,0x00,
+        0x48,0x8B,0x24,0x25, 0x00,0x03,0x16,0x00,
         0x48,0x89,0x04,0x25, 0x00,0x01,0x16,0x00,
         0x48,0x89,0x0C,0x25, 0x08,0x01,0x16,0x00,
         0x48,0x89,0x14,0x25, 0x10,0x01,0x16,0x00,
@@ -259,10 +515,11 @@ naked func syscall_entry() {
         0x4C,0x8B,0x3C,0x25, 0x70,0x01,0x16,0x00,
         0x48,0x8B,0x24,0x25, 0x00,0x02,0x16,0x00,
         0x48,0x0F,0x07,
-        0x48,0xA1, 0xF8,0x0F,0x15,0x00,0x00,0x00,0x00,0x00,
-        0x48,0x89,0xC4,
-        0x48,0xA1, 0xF0,0x0F,0x15,0x00,0x00,0x00,0x00,0x00,
-        0xFF,0xE0);
+        0x48,0x8B,0x24,0x25, 0x08,0x03,0x16,0x00,
+        0x41,0x5f, 0x41,0x5e, 0x41,0x5d, 0x41,0x5c,
+        0x41,0x5b, 0x41,0x5a, 0x41,0x59, 0x41,0x58,
+        0x5f, 0x5e, 0x5d, 0x5b, 0x5a, 0x59, 0x58,
+        0x48,0xCF);
 }
 
 naked func msr_set_fs() {
@@ -504,11 +761,11 @@ func sys_faccessat() {
 }
 
 func sys_exit() {
-    user_exit_code = mem_read64(SYSCTX, 0x30);
-    as_use_boot();
-    let int* c = RING0_CTX;
-    c[0] = addr(sh_resume);
-    c[1] = RING0_RSP;
+    let c = mem_read64(SYSCTX, 0x30);
+    let p = cur_proc;
+    proc_exitc[p] = c;
+    proc_state[p] = ST_ZOMBIE;
+    mem_write64(SYS_RESUME, 0, sched_exit());
     return 1;
 }
 
@@ -821,7 +1078,7 @@ func sys_dispatch2() {
     else if (nr == 33) { r = sys_dup2(); }
     else if (nr == 35) { r = sys_nanosleep(); }
     else if (nr == 39) { mem_write64(SYSCTX, 0, 1); r = 0; }
-    else if (nr == 60 || nr == 231) { r = sys_exit(); }
+    else if (nr == 60 || nr == 231) { return sys_exit(); }
     else if (nr == 63) { r = sys_uname(); }
     else if (nr == 72) { r = sys_fcntl(); }
     else if (nr == 79) { r = sys_getcwd(); }
@@ -921,25 +1178,4 @@ naked func fault_pf() {
         0x48,0xA1, 0x30,0x60,0x16,0x00,0x00,0x00,0x00,0x00,
         0x48,0x83,0xC4,0x08,
         0x48,0xCF);
-}
-
-naked func user_enter(frame) {
-    asm(
-        0x48, 0x89, 0xFC,
-        0x31, 0xC0,
-        0x31, 0xDB,
-        0x31, 0xC9,
-        0x31, 0xD2,
-        0x31, 0xED,
-        0x31, 0xF6,
-        0x31, 0xFF,
-        0x45, 0x31, 0xC0,
-        0x45, 0x31, 0xC9,
-        0x45, 0x31, 0xD2,
-        0x45, 0x31, 0xDB,
-        0x45, 0x31, 0xE4,
-        0x45, 0x31, 0xED,
-        0x45, 0x31, 0xF6,
-        0x45, 0x31, 0xFF,
-        0x48, 0xCF);
 }

@@ -17,6 +17,8 @@ if LGC_SRC == "NO":
 
 C_SRC = "usr/hello_c.c"
 C_OUT = "usr/hello_c"
+SPIN_SRC = "usr/spin_c.c"
+SPIN_OUT = "usr/spin_c"
 
 USERFS_LG = "kernel/userfs.lg"
 USERFS_SIZE = 4096
@@ -25,6 +27,7 @@ SLOTS = [
     ("usr/lgc.elf", "lgc.elf"),
     ("usr/a.lg", "a.lg"),
     (C_OUT, "hello_c"),
+    (SPIN_OUT, "spin_c"),
     ("kernel/ata.lg", "ata.lg"),
     ("kernel/core.lg", "core.lg"),
     ("kernel/elf.lg", "elf.lg"),
@@ -36,6 +39,7 @@ SLOTS = [
     ("kernel/shell.lg", "shell.lg"),
     ("kernel/vga.lg", "vga.lg"),
     ("usr/hello_c.c", "hello_c.c"),
+    ("usr/spin_c.c", "spin_c.c"),
     ("usr/busybox", "busybox"),
     ("README.md", "README.md"),
     ("build.py", "build.py"),
@@ -50,6 +54,8 @@ def build_selfhosted_lgc():
 
 def build_c_program():
     subprocess.run(["gcc", "-static", "-no-pie", "-O2", "-o", C_OUT, C_SRC],
+                   check=True, cwd=root)
+    subprocess.run(["gcc", "-static", "-no-pie", "-O2", "-o", SPIN_OUT, SPIN_SRC],
                    check=True, cwd=root)
 
 
@@ -101,4 +107,4 @@ subprocess.run(["lgc", "kernel/os.lg", IMG], check=True, cwd=root)
 append_blobs(layout)
 
 subprocess.run(["qemu-system-x86_64", "-drive", "format=raw,file=" + IMG, "-no-reboot"],
-               check=True, cwd=root)
+                check=True, cwd=root)
