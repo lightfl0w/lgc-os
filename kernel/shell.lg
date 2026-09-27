@@ -57,7 +57,12 @@ func sh_parse_args(b, start) {
     return n;
 }
 
-func sh_build_stack() {
+func sh_rand_byte(k) {
+    let s = pit_ticks * 1103515245 + 12345 + k * 2654435761;
+    return (s >> 13) & 255;
+}
+
+func sh_build_stack(img, entry) {
     let sp = USER_STACK_TOP;
     let k = sh_argc - 1;
     while (k >= 0) {
@@ -69,10 +74,61 @@ func sh_build_stack() {
         sh_ptrs[k] = sp;
         k -= 1;
     }
-    sp = sp - (sp & 7);
+
+    let e0 = sh_argv_buf + sh_argv_off[0]; let char* ef = e0;
+    let esz = str_len(ef) + 1;
+    sp = sp - esz;
+    let j2 = 0;
+    while (j2 < esz) { mem_write8(sp, j2, mem_read8(ef, j2)); j2 += 1; }
+    let execfn = sp;
+
+    sp = sp - 16;
+    let r = 0;
+    while (r < 16) { mem_write8(sp, r, sh_rand_byte(r)); r += 1; }
+    let randp = sp;
+
+    let phoff = mem_read64(img, 32);
+    let phent = mem_read16(img, 54);
+    let phnum = mem_read16(img, 56);
+    let base = 0;
+    let pi = 0;
+    while (pi < phnum) {
+        let pb = phoff + pi * phent;
+        if (mem_read32(img, pb) == 1) { base = mem_read64(img, pb + 16); pi = phnum; }
+        else { pi += 1; }
+    }
+    let phdr = base + phoff;
+
+    sp = sp - (sp & 15);
+    let npush = 41 + sh_argc;
+    if ((npush & 1) != 0) { sp = sp - 8; mem_write64(sp, 0, 0); }
+
+    sp = sp - 8; mem_write64(sp, 0, 0); sp = sp - 8; mem_write64(sp, 0, 0);
+    sp = sp - 8; mem_write64(sp, 0, 0); sp = sp - 8; mem_write64(sp, 0, 33);
+    sp = sp - 8; mem_write64(sp, 0, execfn); sp = sp - 8; mem_write64(sp, 0, 31);
+    sp = sp - 8; mem_write64(sp, 0, 0); sp = sp - 8; mem_write64(sp, 0, 26);
+    sp = sp - 8; mem_write64(sp, 0, randp); sp = sp - 8; mem_write64(sp, 0, 25);
+    sp = sp - 8; mem_write64(sp, 0, 0); sp = sp - 8; mem_write64(sp, 0, 23);
+    sp = sp - 8; mem_write64(sp, 0, 100); sp = sp - 8; mem_write64(sp, 0, 17);
+    sp = sp - 8; mem_write64(sp, 0, 0); sp = sp - 8; mem_write64(sp, 0, 16);
+    sp = sp - 8; mem_write64(sp, 0, 0); sp = sp - 8; mem_write64(sp, 0, 14);
+    sp = sp - 8; mem_write64(sp, 0, 0); sp = sp - 8; mem_write64(sp, 0, 13);
+    sp = sp - 8; mem_write64(sp, 0, 0); sp = sp - 8; mem_write64(sp, 0, 12);
+    sp = sp - 8; mem_write64(sp, 0, 0); sp = sp - 8; mem_write64(sp, 0, 11);
+    sp = sp - 8; mem_write64(sp, 0, entry); sp = sp - 8; mem_write64(sp, 0, 9);
+    sp = sp - 8; mem_write64(sp, 0, 0); sp = sp - 8; mem_write64(sp, 0, 8);
+    sp = sp - 8; mem_write64(sp, 0, 0); sp = sp - 8; mem_write64(sp, 0, 7);
+    sp = sp - 8; mem_write64(sp, 0, 4096); sp = sp - 8; mem_write64(sp, 0, 6);
+    sp = sp - 8; mem_write64(sp, 0, phnum); sp = sp - 8; mem_write64(sp, 0, 5);
+    sp = sp - 8; mem_write64(sp, 0, phent); sp = sp - 8; mem_write64(sp, 0, 4);
+    sp = sp - 8; mem_write64(sp, 0, phdr); sp = sp - 8; mem_write64(sp, 0, 3);
+
     sp = sp - 8; mem_write64(sp, 0, 0);
+    sp = sp - 8; mem_write64(sp, 0, 0);
+
     k = sh_argc - 1;
     while (k >= 0) { sp = sp - 8; mem_write64(sp, 0, sh_ptrs[k]); k -= 1; }
+
     sp = sp - 8; mem_write64(sp, 0, sh_argc);
     return sp;
 }
@@ -96,6 +152,7 @@ func sh_cmd_help() {
     serial_puts("  help            this text\n");
     serial_puts("  ls              list ramfs files\n");
     serial_puts("  cat <file>      dump a file (non-printable as '.')\n");
+    serial_puts("  save <file> <lba>  write a ramfs file to disk sectors\n");
     serial_puts("  exec <file.elf> [args...]  load ELF via VFS and jump to ring3\n");
     serial_puts("  info            ticks / heap / file count\n");
     serial_puts("  heap <bytes>    alloc+free from kernel heap\n");
@@ -139,6 +196,21 @@ func sh_cmd_cat() {
     return 0;
 }
 
+func sh_cmd_save() {
+    if (sh_argc < 2) { serial_puts("usage: save <file> <lba>\n"); return 0; }
+    let f0 = sh_argv_buf + sh_argv_off[0]; let char* fn = f0;
+    let a0 = sh_argv_buf + sh_argv_off[1]; let char* as = a0;
+    let fd = fs_open(fn);
+    if (fd < 0) { serial_puts("save: no such file: "); str_put(fn); serial_putc('\n'); return 0; }
+    let lba = str_parse_dec(as, 0);
+    let nsect = (fs_size(fd) + 511) / 512;
+    if (ata_write(lba, nsect, fs_file_data(fd)) != 0) { serial_puts("save: ata write failed\n"); return 0; }
+    ata_flush();
+    serial_puts("save: "); str_put(fn); serial_puts(" -> lba="); serial_putn(lba);
+    serial_puts(" sectors="); serial_putn(nsect); serial_putc('\n');
+    return 0;
+}
+
 func sh_cmd_exec() {
     if (sh_argc == 0) { serial_puts("usage: exec <elf-file> [args...]\n"); return 0; }
     let e0 = sh_argv_buf + sh_argv_off[0]; let char* ef = e0;
@@ -146,9 +218,9 @@ func sh_cmd_exec() {
     if (fd < 0) { serial_puts("exec: no such file: "); str_put(ef); serial_putc('\n'); return 0; }
     let img0 = fs_file_data(fd); let char* img = img0;
     let entry = elf_load(img);
+    user_setup_brk(elf_max_end);
     serial_puts("exec: "); str_put(ef); serial_puts(" entry="); serial_puthex(entry); serial_putc('\n');
-    serial_putc('[');
-    let sp = sh_build_stack();
+    let sp = sh_build_stack(img, entry);
     let int* u = user_frame;
     u[0] = entry; u[1] = SEL_UCODE; u[2] = 0x2; u[3] = sp; u[4] = SEL_UDATA;
     let uf = user_frame;
@@ -176,6 +248,7 @@ func sh_dispatch(buf) {
     if (str_eq(cmd, "heap")) { sh_copy_arg(b, argstart, ab); sh_cmd_heap(); return 0; }
     if (str_eq(cmd, "cat")) { sh_copy_arg(b, argstart, ab); sh_cmd_cat(); return 0; }
     if (str_eq(cmd, "exec")) { sh_parse_args(b, argstart); sh_cmd_exec(); return 0; }
+    if (str_eq(cmd, "save")) { sh_parse_args(b, argstart); sh_cmd_save(); return 0; }
     serial_puts("unknown command: "); str_put(cmd); serial_puts(" (try 'help')\n");
     return 0;
 }
@@ -198,7 +271,7 @@ func sh_repl() {
 
 func sh_resume() {
     sti();
-    serial_puts("] exit=");
+    serial_puts("exit=");
     let c = user_exit_code;
     if (c < 0) { serial_putc('-'); c = 0 - c; }
     serial_putn(c);

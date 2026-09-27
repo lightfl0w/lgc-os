@@ -21,11 +21,19 @@ const SYSCTX = 0x160100;
 const SYS_RSP = 0x160200;
 const USER_CODE = 0x180000;
 const USER_STACK_TOP = 0x600000;
+const U_MMAP_BASE = 0xC00000;
+const U_MMAP_LIMIT = 0x1000000;
+const MSR_SCRATCH = 0x161000;
+const MSR_FS_BASE = 0xC0000100;
 const SEL_UCODE = 0x33;
 const SEL_UDATA = 0x2B;
 
 let int pit_ticks = 0;
 let int user_exit_code = 0;
+let int u_brk = 0;
+let int u_mmap_next = 0;
+let int u_fs_base = 0;
+let int rng_state = 0;
 
 func gdt_make_desc(base, limit, access, flags) {
     let int q = limit & 0xFFFF;
@@ -88,9 +96,14 @@ func paging_wx() {
     pd[2] = 0x400000 | 0x87;
     pd[3] = 0x600000 | 0x87;
     pd[4] = 0x800000 | 0x87;
+    pd[5] = 0xA00000 | 0x87;
+    pd[6] = 0xC00000 | 0x87;
+    pd[7] = 0xE00000 | 0x87;
     pml4[0] = pml4[0] | 0x04;
     pdpt[0] = pdpt[0] | 0x04;
     asm(0x0F, 0x20, 0xC0, 0x0D, 0x00, 0x00, 0x01, 0x00, 0x0F, 0x22, 0xC0);
+    asm(0x0F, 0x20, 0xC0, 0x48, 0x83, 0xC8, 0x02, 0x48, 0x83, 0xE0, 0xFB, 0x0F, 0x22, 0xC0);
+    asm(0x0F, 0x20, 0xE0, 0x48, 0x0D, 0x00, 0x06, 0x00, 0x00, 0x0F, 0x22, 0xE0);
     setcr3(PG_PML4);
     return 0;
 }
@@ -227,6 +240,27 @@ naked func syscall_entry() {
         0xFF,0xE0);
 }
 
+naked func msr_set_fs() {
+    asm(
+        0x50, 0x51, 0x52,
+        0xB9, 0x00,0x01,0x00,0xC0,
+        0x48,0xA1, 0x00,0x10,0x16,0x00,0x00,0x00,0x00,0x00,
+        0x48,0x89,0xC2,
+        0x48,0xC1,0xEA,0x20,
+        0x0F,0x30,
+        0x5A, 0x59, 0x58,
+        0xC3);
+}
+
+func user_setup_brk(end) {
+    let b = end + 0xFFF;
+    b = b - (b & 0xFFF);
+    if (b < 0x200000) { b = 0x200000; }
+    u_brk = b;
+    u_mmap_next = U_MMAP_BASE;
+    return 0;
+}
+
 func sys_write() {
     let fd = mem_read64(SYSCTX, 0x30);
     let b0 = mem_read64(SYSCTX, 0x28);
@@ -315,14 +349,132 @@ func sys_exit() {
     return 1;
 }
 
+func sys_brk() {
+    let req = mem_read64(SYSCTX, 0x30);
+    if (u_brk == 0) { u_brk = 0x200000; }
+    if (req == 0) { mem_write64(SYSCTX, 0, u_brk); return 0; }
+    if (req >= 0x200000) { if (req < USER_STACK_TOP) { u_brk = req; } }
+    mem_write64(SYSCTX, 0, u_brk);
+    return 0;
+}
+
+func sys_mmap() {
+    let len = mem_read64(SYSCTX, 0x28);
+    let flags = mem_read64(SYSCTX, 0x48);
+    let anon = flags & 32;
+    if (anon == 0) { mem_write64(SYSCTX, 0, 0 - 22); return 0; }
+    let sz = len + 0xFFF;
+    sz = sz - (sz & 0xFFF);
+    if (sz < 0x1000) { sz = 0x1000; }
+    if (u_mmap_next == 0) { u_mmap_next = U_MMAP_BASE; }
+    if (u_mmap_next + sz > U_MMAP_LIMIT) { mem_write64(SYSCTX, 0, 0 - 12); return 0; }
+    let p = u_mmap_next;
+    u_mmap_next = p + sz;
+    mem_write64(SYSCTX, 0, p);
+    return 0;
+}
+
+func sys_arch_prctl() {
+    let code = mem_read64(SYSCTX, 0x30);
+    let arg = mem_read64(SYSCTX, 0x28);
+    if (code == 0x1002) {
+        u_fs_base = arg;
+        mem_write64(MSR_SCRATCH, 0, arg);
+        msr_set_fs();
+        mem_write64(SYSCTX, 0, 0);
+        return 0;
+    }
+    if (code == 0x1003) {
+        mem_write64(arg, 0, u_fs_base);
+        mem_write64(SYSCTX, 0, 0);
+        return 0;
+    }
+    mem_write64(SYSCTX, 0, 0 - 22);
+    return 0;
+}
+
+func sys_getrandom() {
+    let b0 = mem_read64(SYSCTX, 0x30);
+    let char* buf = b0;
+    let n = mem_read64(SYSCTX, 0x28);
+    if (rng_state == 0) { rng_state = pit_ticks + 0x9E3779B9; }
+    let k = 0;
+    while (k < n) {
+        rng_state = rng_state * 1103515245 + 12345;
+        let r = rng_state >> 16;
+        let byte = r & 255;
+        buf[k] = byte;
+        k += 1;
+    }
+    mem_write64(SYSCTX, 0, n);
+    return 0;
+}
+
+func sys_prlimit64() {
+    let old = mem_read64(SYSCTX, 0x48);
+    if (old != 0) {
+        let inf = 0 - 1;
+        mem_write64(old, 0, 0x800000);
+        mem_write64(old, 8, inf);
+    }
+    mem_write64(SYSCTX, 0, 0);
+    return 0;
+}
+
+func stat_fill(buf, fd) {
+    let k = 0;
+    while (k < 144) { mem_write8(buf, k, 0); k += 1; }
+    mem_write64(buf, 8, 1);
+    mem_write64(buf, 16, 1);
+    mem_write64(buf, 56, 4096);
+    if (fd < 3) {
+        mem_write32(buf, 24, 0x21B0);
+    } else {
+        mem_write32(buf, 24, 0x81A4);
+        let slot = fd - 3;
+        if (slot < FS_MAX_FILES) { mem_write64(buf, 48, fs_len[slot]); }
+    }
+    return 0;
+}
+
+func sys_fstat() {
+    let fd = mem_read64(SYSCTX, 0x30);
+    let buf = mem_read64(SYSCTX, 0x28);
+    stat_fill(buf, fd);
+    mem_write64(SYSCTX, 0, 0);
+    return 0;
+}
+
+func sys_newfstatat() {
+    let buf = mem_read64(SYSCTX, 0x10);
+    let fd = mem_read64(SYSCTX, 0x30);
+    stat_fill(buf, fd);
+    mem_write64(SYSCTX, 0, 0);
+    return 0;
+}
+
 func sys_dispatch2() {
     let nr = mem_read64(SYSCTX, 0);
     let r = 0;
     if (nr == 0) { r = sys_read(); }
     else if (nr == 1) { r = sys_write(); }
     else if (nr == 2) { r = sys_open(); }
-    else if (nr == 3) { r = 0; }
+    else if (nr == 3) { mem_write64(SYSCTX, 0, 0); r = 0; }
+    else if (nr == 5) { r = sys_fstat(); }
+    else if (nr == 9) { r = sys_mmap(); }
+    else if (nr == 10) { mem_write64(SYSCTX, 0, 0); r = 0; }
+    else if (nr == 11) { mem_write64(SYSCTX, 0, 0); r = 0; }
+    else if (nr == 12) { r = sys_brk(); }
+    else if (nr == 16) { mem_write64(SYSCTX, 0, 0 - 25); r = 0; }
     else if (nr == 60 || nr == 231) { r = sys_exit(); }
+    else if (nr == 89) { mem_write64(SYSCTX, 0, 0 - 2); r = 0; }
+    else if (nr == 158) { r = sys_arch_prctl(); }
+    else if (nr == 218) { mem_write64(SYSCTX, 0, 1); r = 0; }
+    else if (nr == 262) { r = sys_newfstatat(); }
+    else if (nr == 267) { mem_write64(SYSCTX, 0, 0 - 2); r = 0; }
+    else if (nr == 273) { mem_write64(SYSCTX, 0, 0); r = 0; }
+    else if (nr == 302) { r = sys_prlimit64(); }
+    else if (nr == 318) { r = sys_getrandom(); }
     else { mem_write64(SYSCTX, 0, 0 - 38); r = 0; }
     return r;
 }
@@ -335,5 +487,22 @@ naked func fault_pf() {
 }
 
 naked func user_enter(frame) {
-    asm(0x48, 0x89, 0xFC, 0x48, 0xCF);
+    asm(
+        0x48, 0x89, 0xFC,
+        0x31, 0xC0,
+        0x31, 0xDB,
+        0x31, 0xC9,
+        0x31, 0xD2,
+        0x31, 0xED,
+        0x31, 0xF6,
+        0x31, 0xFF,
+        0x45, 0x31, 0xC0,
+        0x45, 0x31, 0xC9,
+        0x45, 0x31, 0xD2,
+        0x45, 0x31, 0xDB,
+        0x45, 0x31, 0xE4,
+        0x45, 0x31, 0xED,
+        0x45, 0x31, 0xF6,
+        0x45, 0x31, 0xFF,
+        0x48, 0xCF);
 }

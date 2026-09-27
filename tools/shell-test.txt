@@ -1,8 +1,7 @@
 help
-info
 ls
-echo hello world
-heap 48
-cat init.elf
-badcmd
-exec init.elf
+exec lgc.elf a.lg a.elf
+ls
+exec a.elf
+exec hello_c
+info

@@ -1,10 +1,13 @@
 @import "io.lg";
 
+let int elf_max_end = 0;
+
 func elf_load(image) {
     let entry = mem_read64(image, 24);
     let phoff = mem_read64(image, 32);
     let phes = mem_read16(image, 54);
     let phnum = mem_read16(image, 56);
+    elf_max_end = 0;
     for i in 0..phnum {
         let base = phoff + i * phes;
         if (mem_read32(image, base) == 1) {
@@ -12,8 +15,10 @@ func elf_load(image) {
             let pv = mem_read64(image, base + 16);
             let fsz = mem_read64(image, base + 32);
             let msz = mem_read64(image, base + 40);
+            if (pv + msz > elf_max_end) { elf_max_end = pv + msz; }
             let char* dst = pv;
-            for j in 0..fsz { dst[j] = mem_read8(image, po + j); }
+            let s0 = image + po; let char* src = s0;
+            for j in 0..fsz { dst[j] = src[j]; }
             for j in fsz..msz { dst[j] = 0; }
         }
     }

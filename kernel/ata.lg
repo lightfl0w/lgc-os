@@ -1,0 +1,97 @@
+@import "io.lg";
+
+const ATA_DATA   = 0x1F0;
+const ATA_SECCNT = 0x1F2;
+const ATA_LBA0   = 0x1F3;
+const ATA_LBA1   = 0x1F4;
+const ATA_LBA2   = 0x1F5;
+const ATA_DRIVE  = 0x1F6;
+const ATA_STATUS = 0x1F7;
+const ATA_CMD    = 0x1F7;
+
+naked func ata_inw(port) {
+    asm(0x66, 0x89, 0xFA,
+        0x66, 0xED,
+        0x0F, 0xB7, 0xC0,
+        0xC3);
+}
+
+naked func ata_outw(port, value) {
+    asm(0x66, 0x89, 0xFA,
+        0x8B, 0x44, 0x24, 0x08,
+        0x66, 0xEF,
+        0xC3);
+}
+
+func ata_wait_drq() {
+    let t = 0;
+    while (t < 2000000) {
+        let st = inb(ATA_STATUS);
+        if ((st & 0x80) == 0) {
+            if ((st & 0x08) != 0) { return 0; }
+            if ((st & 0x01) != 0) { return -1; }
+        }
+        t += 1;
+    }
+    return -1;
+}
+
+func ata_read(lba, nsect, dst) {
+    let char* p = dst;
+    let s = 0;
+    while (s < nsect) {
+        let l = lba + s;
+        let t = 0;
+        while (((inb(ATA_STATUS) & 0x80) != 0) && (t < 2000000)) { t += 1; }
+        outb(ATA_DRIVE, 0xE0 | ((l >> 24) & 15));
+        outb(ATA_SECCNT, 1);
+        outb(ATA_LBA0, l & 255);
+        outb(ATA_LBA1, (l >> 8) & 255);
+        outb(ATA_LBA2, (l >> 16) & 255);
+        outb(ATA_CMD, 0x20);
+        if (ata_wait_drq() != 0) { return -1; }
+        let o = s * 512;
+        let w = 0;
+        while (w < 256) {
+            let v = ata_inw(ATA_DATA);
+            p[o + w * 2] = v & 255;
+            p[o + w * 2 + 1] = (v >> 8) & 255;
+            w += 1;
+        }
+        s += 1;
+    }
+    return 0;
+}
+
+func ata_write(lba, nsect, src) {
+    let char* p = src;
+    let s = 0;
+    while (s < nsect) {
+        let l = lba + s;
+        let t = 0;
+        while (((inb(ATA_STATUS) & 0x80) != 0) && (t < 2000000)) { t += 1; }
+        outb(ATA_DRIVE, 0xE0 | ((l >> 24) & 15));
+        outb(ATA_SECCNT, 1);
+        outb(ATA_LBA0, l & 255);
+        outb(ATA_LBA1, (l >> 8) & 255);
+        outb(ATA_LBA2, (l >> 16) & 255);
+        outb(ATA_CMD, 0x30);
+        if (ata_wait_drq() != 0) { return -1; }
+        let o = s * 512;
+        let w = 0;
+        while (w < 256) {
+            let v = mem_read8(p, o + w * 2) | (mem_read8(p, o + w * 2 + 1) << 8);
+            ata_outw(ATA_DATA, v);
+            w += 1;
+        }
+        s += 1;
+    }
+    return 0;
+}
+
+func ata_flush() {
+    outb(ATA_CMD, 0xE7);
+    let t = 0;
+    while (((inb(ATA_STATUS) & 0x80) != 0) && (t < 2000000)) { t += 1; }
+    return 0;
+}

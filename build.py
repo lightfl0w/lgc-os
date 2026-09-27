@@ -2,14 +2,42 @@ import os, subprocess, pathlib
 
 root = pathlib.Path(__file__).parent
 
-BLOB_BASE = 0x800000
-SLOT_STRIDE = 0x10000
+IMG = "lgc-os.img"
+BLOB_LBA = 256         
+SECTOR = 512
+PAGE = 0x1000
+
+RAMFS_BASE = 0x800000  
+SCRATCH_BASE = 0xA00000 
+SCRATCH_LIMIT = 0xC00000  
 
 LGC_SRC = os.environ.get("LGC_SRC", "/root/compiler/src/lgc.lg")
+if LGC_SRC == "NO":
+    raise RuntimeError("请设置LGC自举版源码路径")
+
+C_SRC = "usr/hello_c.c"
+C_OUT = "usr/hello_c"
+
+USERFS_LG = "kernel/userfs.lg"
+USERFS_SIZE = 4096
 
 SLOTS = [
-    ("lgc.elf", "usr/lgc.elf"),
-    ("a.lg", "usr/a.lg"),
+    ("usr/lgc.elf", "lgc.elf"),
+    ("usr/a.lg", "a.lg"),
+    (C_OUT, "hello_c"),
+    ("kernel/ata.lg", "ata.lg"),
+    ("kernel/core.lg", "core.lg"),
+    ("kernel/elf.lg", "elf.lg"),
+    ("kernel/fs.lg", "fs.lg"),
+    ("kernel/heap.lg", "heap.lg"),
+    ("kernel/io.lg", "io.lg"),
+    ("kernel/os.lg", "os.lg"),
+    ("kernel/shell.lg", "shell.lg"),
+    ("kernel/vga.lg", "vga.lg"),
+    ("usr/hello_c.c", "hello_c.c"),
+    ("README.md", "README.md"),
+    ("build.py", "build.py"),
+    (USERFS_LG, "userfs.lg"),
 ]
 
 
@@ -18,27 +46,57 @@ def build_selfhosted_lgc():
                    check=True, cwd=root)
 
 
-def gen_userfs():
+def build_c_program():
+    subprocess.run(["gcc", "-static", "-no-pie", "-O2", "-o", C_OUT, C_SRC],
+                   check=True, cwd=root)
+
+
+def disk_layout():
+    layout = []
+    lba = BLOB_LBA
+    addr = RAMFS_BASE
+    for path, name in SLOTS:
+        size = USERFS_SIZE if path == USERFS_LG else (root / path).stat().st_size
+        nsect = (size + SECTOR - 1) // SECTOR
+        layout.append((name, path, size, lba, nsect, addr))
+        lba += nsect
+        addr = (addr + size + PAGE - 1) & ~(PAGE - 1)
+    name, path, size, lba, nsect, addr = layout[-1]
+    if addr + size > SCRATCH_BASE:
+        raise RuntimeError("RAMFS 预载区超出 0x%X，请调整布局" % SCRATCH_BASE)
+    return layout
+
+
+def gen_userfs(layout):
     lines = ['@import "fs.lg";', '', "func userfs_init() {"]
-    for i, (name, path) in enumerate(SLOTS):
-        size = (root / path).stat().st_size
-        lines.append('    fs_preload(%d, "%s", %d);' % (i, name, size))
+    for i, (name, path, size, lba, nsect, addr) in enumerate(layout):
+        lines.append('    fs_preload(%d, "%s", 0x%X, %d);' % (i, name, addr, size))
+    for i, (name, path, size, lba, nsect, addr) in enumerate(layout):
+        lines.append('    fs_load_disk(%d, %d, %d);' % (i, lba, nsect))
     lines += ["    return 0;", "}"]
-    (root / "kernel/userfs.lg").write_text("\n".join(lines) + "\n")
+    text = "\n".join(lines) + "\n"
+    if len(text) > USERFS_SIZE:
+        raise RuntimeError("userfs.lg 超过 %d 字节，请调大 USERFS_SIZE" % USERFS_SIZE)
+    (root / USERFS_LG).write_bytes(text.encode() + b"\n" * (USERFS_SIZE - len(text)))
 
 
-def qemu_cmd():
-    cmd = ["qemu-system-x86_64", "-drive", "format=raw,file=lgc-os.img"]
-    for i, (name, path) in enumerate(SLOTS):
-        addr = BLOB_BASE + i * SLOT_STRIDE
-        cmd += ["-device", "loader,file=%s,addr=0x%x,force-raw=on" % (path, addr)]
-    cmd += ["-no-reboot"]
-    return cmd
+def append_blobs(layout):
+    with (root / IMG).open("r+b") as f:
+        for name, path, size, lba, nsect, addr in layout:
+            data = (root / path).read_bytes()
+            f.seek(lba * SECTOR)
+            f.write(data)
+            f.write(b"\x00" * (nsect * SECTOR - size))
 
 
 build_selfhosted_lgc()
-gen_userfs()
+build_c_program()
 
-subprocess.run(["lgc", "kernel/os.lg", "lgc-os.img"], check=True, cwd=root)
+layout = disk_layout()
+gen_userfs(layout)
 
-subprocess.run(qemu_cmd(), check=True, cwd=root)
+subprocess.run(["lgc", "kernel/os.lg", IMG], check=True, cwd=root)
+append_blobs(layout)
+
+subprocess.run(["qemu-system-x86_64", "-drive", "format=raw,file=" + IMG, "-no-reboot"],
+               check=True, cwd=root)
