@@ -1,21 +1,26 @@
 import sys, struct
 
-SYS_PUTC = 0
-SYS_EXIT = 1
-SYS_PUTS = 2
+SYS_READ = 0
+SYS_WRITE = 1
+SYS_EXIT = 60
 
-PREFIX_LEN = 24
+PREFIX_LEN = 34
 
 def code_bytes(msg, entry, exitcode):
+    body = msg.encode()
     out = bytearray()
-    out += b'\xb8' + struct.pack('<I', SYS_PUTS)
-    out += b'\xbf' + struct.pack('<I', entry + PREFIX_LEN)
-    out += b'\xcd\x80'
+
+    out += b'\xb8' + struct.pack('<I', SYS_WRITE)
+    out += b'\xbf' + struct.pack('<I', 1)
+    out += b'\xbe' + struct.pack('<I', entry + PREFIX_LEN)
+    out += b'\xba' + struct.pack('<I', len(body))
+    out += b'\x0f\x05'
+
     out += b'\xb8' + struct.pack('<I', SYS_EXIT)
     out += b'\xbf' + struct.pack('<I', exitcode & 0xFFFFFFFF)
-    out += b'\xcd\x80'
+    out += b'\x0f\x05'
     assert len(out) == PREFIX_LEN
-    return bytes(out) + msg.encode() + b'\x00'
+    return bytes(out) + body + b'\x00'
 
 def build_elf(msg, entry, exitcode):
     code = code_bytes(msg, entry, exitcode)

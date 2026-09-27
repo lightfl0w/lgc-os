@@ -1,6 +1,6 @@
 @import "io.lg";
 
-const USRELF_LEN = 151;
+const USRELF_LEN = 161;
 
 func usrelf_bytes(dst) {
     mem_write32(dst, 0, 0x464c457f);
@@ -27,21 +27,22 @@ func usrelf_bytes(dst) {
     mem_write32(dst, 84, 0x00000000);
     mem_write32(dst, 88, 0x00180000);
     mem_write32(dst, 92, 0x00000000);
-    mem_write32(dst, 96, 0x0000001f);
+    mem_write32(dst, 96, 0x00000029);
     mem_write32(dst, 100, 0x00000000);
-    mem_write32(dst, 104, 0x0000001f);
+    mem_write32(dst, 104, 0x00000029);
     mem_write32(dst, 108, 0x00000000);
     mem_write32(dst, 112, 0x00001000);
     mem_write32(dst, 116, 0x00000000);
-    mem_write32(dst, 120, 0x000002b8);
-    mem_write32(dst, 124, 0x0018bf00);
-    mem_write32(dst, 128, 0x80cd0018);
-    mem_write32(dst, 132, 0x000001b8);
-    mem_write32(dst, 136, 0x002abf00);
-    mem_write32(dst, 140, 0x80cd0000);
-    mem_write32(dst, 144, 0x474e4952);
-    mem_write8(dst, 148, 51);
-    mem_write8(dst, 149, 33);
-    mem_write8(dst, 150, 0);
-    return 151;
+    mem_write32(dst, 120, 0x000001b8);
+    mem_write32(dst, 124, 0x0001bf00);
+    mem_write32(dst, 128, 0x22be0000);
+    mem_write32(dst, 132, 0xba001800);
+    mem_write32(dst, 136, 0x00000006);
+    mem_write32(dst, 140, 0x3cb8050f);
+    mem_write32(dst, 144, 0xbf000000);
+    mem_write32(dst, 148, 0x0000002a);
+    mem_write32(dst, 152, 0x4952050f);
+    mem_write32(dst, 156, 0x2133474e);
+    mem_write8(dst, 160, 0);
+    return 161;
 }

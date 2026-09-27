@@ -8,7 +8,7 @@
 os.lg     @boot 入口
 shell.lg  一个微shell
 vga.lg    VGA 文本模式输出、滚动
-core.lg   GDT/TSS、页表、IDT、PIC/PIT IRQ0、ring3 + int 0x80 系统调用
+core.lg   GDT/TSS、页表、IDT、PIC/PIT IRQ0、ring3 + syscall/sysret (Linux ABI) 与 int 0x80 系统调用
 io.lg     COM1 串口和读写字节的助手
 heap.lg   内核堆
 fs.lg     一个简易 RAMFS
@@ -24,7 +24,15 @@ python ./build.py
 
 ## 系统调用
 
-`int 0x80`
+主路径走 `syscall`/`sysret` 指令，兼容Linux x86-64 ABI
+
+| nr | 名称 | 参数 | 返回 |
+|----|------|------|------|
+| 0  | read | rdi = fd, rsi = buf, rdx = count | 读取字节数 |
+| 1  | write | rdi = fd, rsi = buf, rdx = count | 写入字节数 |
+| 60 / 231 | exit / exit_group | rdi = 退出码 | 不返回 |
+
+未知编号返回 `-38` (ENOSYS)。
 
 | nr | 名称 | 参数 | 返回 |
 |----|------|------|------|
@@ -38,6 +46,7 @@ python ./build.py
 
 - [x] ELF 文件放进 RAMFS，loader 经 VFS 读取加载
 - [x] 用户态 ring3 + 系统调用（int 0x80）
+- [x] syscall/sysret 系统调用，兼容 Linux x86-64 ABI（read/write/exit）
 - [x] 各 demo 合并成单一 @import 内核
 - [x] 加载真实 ELF 文件（usr/hello.elf 嵌进镜像，不是运行时现算）
 - [x] ring0 命令 shell（内建命令 + exec 跑 ELF）

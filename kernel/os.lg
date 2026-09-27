@@ -30,6 +30,7 @@ func main() {
     serial_puts(" ustack=");
     serial_puthex(pt[0x19F]);
     serial_puts("\n");
+    syscall_init();
     pic_init();
     pit_init(1193);
     sti();
