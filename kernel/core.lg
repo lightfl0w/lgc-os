@@ -20,13 +20,15 @@ const SYS_LSTAR = 0x160000;
 const SYSCTX = 0x160100;
 const SYS_RSP = 0x160200;
 const USER_CODE = 0x180000;
-const USER_STACK_TOP = 0x600000;
+const USER_STACK_TOP = 0xE00000;
+const BRK_LIMIT = 0xC00000;
 const U_MMAP_BASE = 0xC00000;
-const U_MMAP_LIMIT = 0x1000000;
+const U_MMAP_LIMIT = 0xE00000;
 const MSR_SCRATCH = 0x161000;
 const MSR_FS_BASE = 0xC0000100;
 const SEL_UCODE = 0x33;
 const SEL_UDATA = 0x2B;
+const FD_MAX = 16;
 
 let int pit_ticks = 0;
 let int user_exit_code = 0;
@@ -34,6 +36,27 @@ let int u_brk = 0;
 let int u_mmap_next = 0;
 let int u_fs_base = 0;
 let int rng_state = 0;
+let int fd_kind[16];
+let int fd_slot[16];
+let int fd_pos[16];
+let char dir_tmp[64];
+let int trace_sys = 0;
+
+func fd_reset() {
+    let i = 0;
+    while (i < FD_MAX) { fd_kind[i] = 0; fd_slot[i] = 0; fd_pos[i] = 0; i += 1; }
+    fd_kind[0] = 1; fd_kind[1] = 1; fd_kind[2] = 1;
+    return 0;
+}
+
+func fd_alloc(kind) {
+    let i = 0;
+    while (i < FD_MAX) {
+        if (fd_kind[i] == 0) { fd_kind[i] = kind; fd_slot[i] = 0; fd_pos[i] = 0; return i; }
+        i += 1;
+    }
+    return 0 - 24;
+}
 
 func gdt_make_desc(base, limit, access, flags) {
     let int q = limit & 0xFFFF;
@@ -99,6 +122,7 @@ func paging_wx() {
     pd[5] = 0xA00000 | 0x87;
     pd[6] = 0xC00000 | 0x87;
     pd[7] = 0xE00000 | 0x87;
+    for r in 0x20..0x40 { pd[r] = (r << 21) | 0x83; }
     pml4[0] = pml4[0] | 0x04;
     pdpt[0] = pdpt[0] | 0x04;
     asm(0x0F, 0x20, 0xC0, 0x0D, 0x00, 0x00, 0x01, 0x00, 0x0F, 0x22, 0xC0);
@@ -258,86 +282,223 @@ func user_setup_brk(end) {
     if (b < 0x200000) { b = 0x200000; }
     u_brk = b;
     u_mmap_next = U_MMAP_BASE;
+    fd_reset();
     return 0;
+}
+
+func kwrite(fd, b0, cnt) {
+    let char* buf = b0;
+    if (fd < 0 || fd >= FD_MAX) { return 0 - 9; }
+    if (fd_kind[fd] == 1) {
+        let k = 0;
+        while (k < cnt) { serial_putc(buf[k]); k += 1; }
+        return k;
+    }
+    if (fd_kind[fd] == 2) {
+        let slot = fd_slot[fd];
+        let pos = fd_pos[fd];
+        let avail = FS_MAX_SIZE - pos;
+        if (cnt > avail) { cnt = avail; }
+        if (cnt < 0) { cnt = 0; }
+        let n = 0;
+        while (n < cnt) { mem_write8(fs_file_data(slot), pos + n, buf[n]); n += 1; }
+        fd_pos[fd] = pos + n;
+        if (pos + n > fs_len[slot]) { fs_len[slot] = pos + n; }
+        return n;
+    }
+    return 0 - 9;
 }
 
 func sys_write() {
     let fd = mem_read64(SYSCTX, 0x30);
     let b0 = mem_read64(SYSCTX, 0x28);
-    let char* buf = b0;
     let cnt = mem_read64(SYSCTX, 0x10);
-    if (fd == 1 || fd == 2) {
-        let k = 0;
-        while (k < cnt) { serial_putc(buf[k]); k += 1; }
-        mem_write64(SYSCTX, 0, k);
-        return 0;
-    }
-    let slot = fd - 3;
-    if (slot >= 0) {
-        if (slot < FS_MAX_FILES) {
-            if (fs_used[slot] != 0) {
-                let pos = fs_pos[slot];
-                if (pos + cnt > FS_MAX_SIZE) { cnt = FS_MAX_SIZE - pos; }
-                let n = 0;
-                while (n < cnt) { mem_write8(fs_file_data(slot), pos + n, buf[n]); n += 1; }
-                fs_pos[slot] = pos + n;
-                if (pos + n > fs_len[slot]) { fs_len[slot] = pos + n; }
-                mem_write64(SYSCTX, 0, n);
-                return 0;
-            }
-        }
-    }
-    mem_write64(SYSCTX, 0, 0 - 9);
+    mem_write64(SYSCTX, 0, kwrite(fd, b0, cnt));
     return 0;
+}
+
+func kwritev(fd, iov, n) {
+    let total = 0;
+    let i = 0;
+    while (i < n) {
+        let base = mem_read64(iov + i * 16, 0);
+        let len = mem_read64(iov + i * 16, 8);
+        let w = kwrite(fd, base, len);
+        if (w < 0) { if (total == 0) { total = w; } i = n; }
+        else { total = total + w; i += 1; }
+    }
+    return total;
+}
+
+func sys_writev() {
+    let fd = mem_read64(SYSCTX, 0x30);
+    let iov = mem_read64(SYSCTX, 0x28);
+    let n = mem_read64(SYSCTX, 0x10);
+    mem_write64(SYSCTX, 0, kwritev(fd, iov, n));
+    return 0;
+}
+
+func kread(fd, b0, cnt) {
+    let char* buf = b0;
+    if (fd < 0 || fd >= FD_MAX) { return 0 - 9; }
+    if (fd_kind[fd] == 1) {
+        let k = 0;
+        let go = 1;
+        while (go != 0 && k < cnt) {
+            if (k == 0) { buf[k] = console_getc(); k += 1; }
+            else { if (console_poll() != 0) { buf[k] = console_getc(); k += 1; } else { go = 0; } }
+        }
+        return k;
+    }
+    if (fd_kind[fd] == 2) {
+        let slot = fd_slot[fd];
+        let pos = fd_pos[fd];
+        let m = cnt;
+        let avail = fs_len[slot] - pos;
+        if (m > avail) { m = avail; }
+        if (m < 0) { m = 0; }
+        let n = 0;
+        while (n < m) { buf[n] = mem_read8(fs_file_data(slot), pos + n); n += 1; }
+        fd_pos[fd] = pos + n;
+        return n;
+    }
+    return 0 - 9;
 }
 
 func sys_read() {
     let fd = mem_read64(SYSCTX, 0x30);
     let b0 = mem_read64(SYSCTX, 0x28);
-    let char* buf = b0;
     let cnt = mem_read64(SYSCTX, 0x10);
-    if (fd == 0) {
-        let k = 0;
-        while (k < cnt) { buf[k] = console_getc(); k += 1; }
-        mem_write64(SYSCTX, 0, k);
-        return 0;
-    }
-    let slot = fd - 3;
-    if (slot >= 0) {
-        if (slot < FS_MAX_FILES) {
-            if (fs_used[slot] != 0) {
-                let pos = fs_pos[slot];
-                let m = cnt;
-                let avail = fs_len[slot] - pos;
-                if (m > avail) { m = avail; }
-                let n = 0;
-                while (n < m) { buf[n] = mem_read8(fs_file_data(slot), pos + n); n += 1; }
-                fs_pos[slot] = pos + n;
-                mem_write64(SYSCTX, 0, n);
-                return 0;
-            }
-        }
-    }
-    mem_write64(SYSCTX, 0, 0 - 9);
+    mem_write64(SYSCTX, 0, kread(fd, b0, cnt));
     return 0;
+}
+
+func sys_readv() {
+    let fd = mem_read64(SYSCTX, 0x30);
+    let iov = mem_read64(SYSCTX, 0x28);
+    let n = mem_read64(SYSCTX, 0x10);
+    let total = 0;
+    let i = 0;
+    while (i < n) {
+        let base = mem_read64(iov + i * 16, 0);
+        let len = mem_read64(iov + i * 16, 8);
+        let r = kread(fd, base, len);
+        if (r < 0) { if (total == 0) { total = r; } i = n; }
+        else { total = total + r; if (r < len) { i = n; } else { i += 1; } }
+    }
+    mem_write64(SYSCTX, 0, total);
+    return 0;
+}
+
+func sys_lseek() {
+    let fd = mem_read64(SYSCTX, 0x30);
+    let off = mem_read64(SYSCTX, 0x28);
+    let whence = mem_read64(SYSCTX, 0x10);
+    if (fd < 0 || fd >= FD_MAX) { mem_write64(SYSCTX, 0, 0 - 9); return 0; }
+    if (fd_kind[fd] != 2) { mem_write64(SYSCTX, 0, 0 - 29); return 0; }
+    let slot = fd_slot[fd];
+    let p = off;
+    if (whence == 1) { p = fd_pos[fd] + off; }
+    else if (whence == 2) { p = fs_len[slot] + off; }
+    if (p < 0) { p = 0; }
+    fd_pos[fd] = p;
+    mem_write64(SYSCTX, 0, p);
+    return 0;
+}
+
+func sys_close() {
+    let fd = mem_read64(SYSCTX, 0x30);
+    if (fd < 0 || fd >= FD_MAX) { mem_write64(SYSCTX, 0, 0 - 9); return 0; }
+    if (fd_kind[fd] == 0) { mem_write64(SYSCTX, 0, 0 - 9); return 0; }
+    fd_kind[fd] = 0;
+    fd_slot[fd] = 0;
+    fd_pos[fd] = 0;
+    mem_write64(SYSCTX, 0, 0);
+    return 0;
+}
+
+func kdup2(oldfd, newfd) {
+    if (oldfd < 0 || oldfd >= FD_MAX) { return 0 - 9; }
+    if (newfd < 0 || newfd >= FD_MAX) { return 0 - 9; }
+    if (fd_kind[oldfd] == 0) { return 0 - 9; }
+    if (oldfd == newfd) { return newfd; }
+    fd_kind[newfd] = fd_kind[oldfd];
+    fd_slot[newfd] = fd_slot[oldfd];
+    fd_pos[newfd] = fd_pos[oldfd];
+    return newfd;
+}
+
+func sys_dup() {
+    let oldfd = mem_read64(SYSCTX, 0x30);
+    if (oldfd < 0 || oldfd >= FD_MAX) { mem_write64(SYSCTX, 0, 0 - 9); return 0; }
+    if (fd_kind[oldfd] == 0) { mem_write64(SYSCTX, 0, 0 - 9); return 0; }
+    let d = fd_alloc(fd_kind[oldfd]);
+    if (d < 0) { mem_write64(SYSCTX, 0, d); return 0; }
+    fd_slot[d] = fd_slot[oldfd];
+    fd_pos[d] = fd_pos[oldfd];
+    mem_write64(SYSCTX, 0, d);
+    return 0;
+}
+
+func sys_dup2() {
+    let oldfd = mem_read64(SYSCTX, 0x30);
+    let newfd = mem_read64(SYSCTX, 0x28);
+    mem_write64(SYSCTX, 0, kdup2(oldfd, newfd));
+    return 0;
+}
+
+func k_is_dot(p0) {
+    let a = mem_read8(p0, 0);
+    let b = mem_read8(p0, 1);
+    if (a == 46 && b == 0) { return 1; }
+    if (a == 47 && b == 0) { return 1; }
+    return 0;
+}
+
+func kopen(p0, flags) {
+    if (k_is_dot(p0) != 0) { return fd_alloc(3); }
+    let s = fs_open(p0);
+    if (s < 0) {
+        if ((flags & 0x40) == 0) { return 0 - 2; }
+        s = fs_create_slot(p0);
+        if (s < 0) { return 0 - 28; }
+        fs_len[s] = 0;
+    }
+    let d = fd_alloc(2);
+    if (d < 0) { return d; }
+    fd_slot[d] = s;
+    if ((flags & 0x200) != 0) { fs_len[s] = 0; }
+    if ((flags & 0x400) != 0) { fd_pos[d] = fs_len[s]; }
+    return d;
 }
 
 func sys_open() {
     let p0 = mem_read64(SYSCTX, 0x30);
-    let char* path = p0;
     let flags = mem_read64(SYSCTX, 0x28);
-    let s = fs_open(path);
-    if (flags == 0) {
-        if (s < 0) { mem_write64(SYSCTX, 0, 0 - 2); return 0; }
-        fs_pos[s] = 0;
-        mem_write64(SYSCTX, 0, s + 3);
-        return 0;
-    }
-    if (s < 0) { s = fs_create_slot(path); }
-    if (s < 0) { mem_write64(SYSCTX, 0, 0 - 28); return 0; }
-    fs_len[s] = 0;
-    fs_pos[s] = 0;
-    mem_write64(SYSCTX, 0, s + 3);
+    mem_write64(SYSCTX, 0, kopen(p0, flags));
+    return 0;
+}
+
+func sys_openat() {
+    let p0 = mem_read64(SYSCTX, 0x28);
+    let flags = mem_read64(SYSCTX, 0x10);
+    mem_write64(SYSCTX, 0, kopen(p0, flags));
+    return 0;
+}
+
+func sys_access() {
+    let p0 = mem_read64(SYSCTX, 0x30);
+    if (k_is_dot(p0) != 0) { mem_write64(SYSCTX, 0, 0); return 0; }
+    if (fs_open(p0) < 0) { mem_write64(SYSCTX, 0, 0 - 2); return 0; }
+    mem_write64(SYSCTX, 0, 0);
+    return 0;
+}
+
+func sys_faccessat() {
+    let p0 = mem_read64(SYSCTX, 0x28);
+    if (k_is_dot(p0) != 0) { mem_write64(SYSCTX, 0, 0); return 0; }
+    if (fs_open(p0) < 0) { mem_write64(SYSCTX, 0, 0 - 2); return 0; }
+    mem_write64(SYSCTX, 0, 0);
     return 0;
 }
 
@@ -353,7 +514,12 @@ func sys_brk() {
     let req = mem_read64(SYSCTX, 0x30);
     if (u_brk == 0) { u_brk = 0x200000; }
     if (req == 0) { mem_write64(SYSCTX, 0, u_brk); return 0; }
-    if (req >= 0x200000) { if (req < USER_STACK_TOP) { u_brk = req; } }
+    if (req >= 0x200000) {
+        if (req < BRK_LIMIT) {
+            if (req > u_brk) { mem_zero(u_brk, req - u_brk); }
+            u_brk = req;
+        }
+    }
     mem_write64(SYSCTX, 0, u_brk);
     return 0;
 }
@@ -370,6 +536,7 @@ func sys_mmap() {
     if (u_mmap_next + sz > U_MMAP_LIMIT) { mem_write64(SYSCTX, 0, 0 - 12); return 0; }
     let p = u_mmap_next;
     u_mmap_next = p + sz;
+    mem_zero(p, sz);
     mem_write64(SYSCTX, 0, p);
     return 0;
 }
@@ -421,69 +588,295 @@ func sys_prlimit64() {
     return 0;
 }
 
-func stat_fill(buf, fd) {
+func kstat_zero(buf) {
     let k = 0;
     while (k < 144) { mem_write8(buf, k, 0); k += 1; }
     mem_write64(buf, 8, 1);
     mem_write64(buf, 16, 1);
     mem_write64(buf, 56, 4096);
-    if (fd < 3) {
-        mem_write32(buf, 24, 0x21B0);
-    } else {
-        mem_write32(buf, 24, 0x81A4);
-        let slot = fd - 3;
-        if (slot < FS_MAX_FILES) { mem_write64(buf, 48, fs_len[slot]); }
+    mem_write64(buf, 64, 8);
+    return 0;
+}
+
+func stat_fill(buf, fd) {
+    kstat_zero(buf);
+    if (fd < 0 || fd >= FD_MAX) { return 0 - 9; }
+    if (fd_kind[fd] == 3) {
+        mem_write32(buf, 24, 0x41ED);
+        mem_write64(buf, 48, 4096);
+        return 0;
     }
+    if (fd_kind[fd] == 1) {
+        mem_write32(buf, 24, 0x21B0);
+        return 0;
+    }
+    if (fd_kind[fd] == 2) {
+        mem_write32(buf, 24, 0x81A4);
+        mem_write64(buf, 48, fs_len[fd_slot[fd]]);
+        return 0;
+    }
+    return 0 - 9;
+}
+
+func stat_path(p0, buf) {
+    kstat_zero(buf);
+    if (k_is_dot(p0) != 0) {
+        mem_write32(buf, 24, 0x41ED);
+        mem_write64(buf, 48, 4096);
+        return 0;
+    }
+    let s = fs_open(p0);
+    if (s < 0) { return 0 - 2; }
+    mem_write32(buf, 24, 0x81A4);
+    mem_write64(buf, 48, fs_len[s]);
     return 0;
 }
 
 func sys_fstat() {
     let fd = mem_read64(SYSCTX, 0x30);
     let buf = mem_read64(SYSCTX, 0x28);
-    stat_fill(buf, fd);
-    mem_write64(SYSCTX, 0, 0);
+    mem_write64(SYSCTX, 0, stat_fill(buf, fd));
+    return 0;
+}
+
+func sys_stat() {
+    let p0 = mem_read64(SYSCTX, 0x30);
+    let buf = mem_read64(SYSCTX, 0x28);
+    mem_write64(SYSCTX, 0, stat_path(p0, buf));
     return 0;
 }
 
 func sys_newfstatat() {
+    let p0 = mem_read64(SYSCTX, 0x28);
     let buf = mem_read64(SYSCTX, 0x10);
+    mem_write64(SYSCTX, 0, stat_path(p0, buf));
+    return 0;
+}
+
+func dir_name(i) {
+    if (i == 0) { mem_write8(dir_tmp, 0, 46); mem_write8(dir_tmp, 1, 0); return 1; }
+    if (i == 1) { mem_write8(dir_tmp, 0, 46); mem_write8(dir_tmp, 1, 46); mem_write8(dir_tmp, 2, 0); return 2; }
+    let slot = i - 2;
+    if (slot >= FS_MAX_FILES) { return 0 - 1; }
+    if (fs_used[slot] == 0) { return 0 - 1; }
+    let j = 0;
+    while (1) {
+        let c = mem_read8(fs_name_data(slot), j);
+        mem_write8(dir_tmp, j, c);
+        if (c == 0) { return j; }
+        j += 1;
+    }
+    return 0;
+}
+
+func sys_getdents64() {
     let fd = mem_read64(SYSCTX, 0x30);
-    stat_fill(buf, fd);
+    if (fd < 0 || fd >= FD_MAX) { mem_write64(SYSCTX, 0, 0 - 9); return 0; }
+    if (fd_kind[fd] != 3) { mem_write64(SYSCTX, 0, 0 - 20); return 0; }
+    let buf = mem_read64(SYSCTX, 0x28);
+    let cnt = mem_read64(SYSCTX, 0x10);
+    let off = 0;
+    let p = fd_pos[fd];
+    while (1) {
+        let nl = dir_name(p);
+        if (nl < 0) { break; }
+        let reclen = 19 + nl + 1;
+        reclen = (reclen + 7) & 0xFFF8;
+        if (off + reclen > cnt) { break; }
+        let z = 0;
+        while (z < reclen) { mem_write8(buf, off + z, 0); z += 1; }
+        mem_write64(buf, off, p + 1);
+        mem_write64(buf, off + 8, p + 1);
+        mem_write16(buf, off + 16, reclen);
+        let typ = 8;
+        if (p < 2) { typ = 4; }
+        mem_write8(buf, off + 18, typ);
+        let m = 0;
+        while (m <= nl) { mem_write8(buf, off + 19 + m, mem_read8(dir_tmp, m)); m += 1; }
+        off = off + reclen;
+        p = p + 1;
+    }
+    fd_pos[fd] = p;
+    mem_write64(SYSCTX, 0, off);
+    return 0;
+}
+
+func kput_str(buf, off, src) {
+    let char* s = src;
+    let i = 0;
+    while (s[i] != 0) { mem_write8(buf, off + i, s[i]); i += 1; }
+    return 0;
+}
+
+func sys_uname() {
+    let buf = mem_read64(SYSCTX, 0x30);
+    let k = 0;
+    while (k < 390) { mem_write8(buf, k, 0); k += 1; }
+    kput_str(buf, 0, "Linux");
+    kput_str(buf, 65, "lgc");
+    kput_str(buf, 130, "5.10.0");
+    kput_str(buf, 195, "lgc-os");
+    kput_str(buf, 260, "x86_64");
     mem_write64(SYSCTX, 0, 0);
+    return 0;
+}
+
+func sys_getcwd() {
+    let buf = mem_read64(SYSCTX, 0x30);
+    mem_write8(buf, 0, 47);
+    mem_write8(buf, 1, 0);
+    mem_write64(SYSCTX, 0, buf);
+    return 0;
+}
+
+func sys_clock_gettime() {
+    let tp = mem_read64(SYSCTX, 0x28);
+    let t = pit_ticks;
+    mem_write64(tp, 0, t / 100);
+    mem_write64(tp, 8, (t % 100) * 10000000);
+    mem_write64(SYSCTX, 0, 0);
+    return 0;
+}
+
+func sys_ioctl() {
+    let req = mem_read64(SYSCTX, 0x28);
+    let arg = mem_read64(SYSCTX, 0x10);
+    if (req == 0x5401) {
+        let k = 0;
+        while (k < 64) { mem_write8(arg, k, 0); k += 1; }
+        mem_write32(arg, 12, 0x8B);
+        mem_write64(SYSCTX, 0, 0);
+        return 0;
+    }
+    if (req == 0x5413) {
+        mem_write16(arg, 0, 25);
+        mem_write16(arg, 2, 80);
+        mem_write16(arg, 4, 0);
+        mem_write16(arg, 6, 0);
+        mem_write64(SYSCTX, 0, 0);
+        return 0;
+    }
+    mem_write64(SYSCTX, 0, 0 - 25);
+    return 0;
+}
+
+naked func cpu_sti() { asm(0xFB, 0xC3); }
+naked func cpu_cli() { asm(0xFA, 0xC3); }
+
+func sys_nanosleep() {
+    let req = mem_read64(SYSCTX, 0x30);
+    let sec = mem_read64(req, 0);
+    let nsec = mem_read64(req, 8);
+    let want = sec * 100 + nsec / 10000000;
+    let start = pit_ticks;
+    cpu_sti();
+    while (pit_ticks - start < want) { }
+    cpu_cli();
+    mem_write64(SYSCTX, 0, 0);
+    return 0;
+}
+
+func sys_ret0() {
+    mem_write64(SYSCTX, 0, 0);
+    return 0;
+}
+
+func sys_fcntl() {
+    let fd = mem_read64(SYSCTX, 0x30);
+    let cmd = mem_read64(SYSCTX, 0x28);
+    if (cmd == 1) { mem_write64(SYSCTX, 0, 0); return 0; }
+    if (cmd == 3) {
+        if (fd < 0 || fd >= FD_MAX) { mem_write64(SYSCTX, 0, 0 - 9); return 0; }
+        if (fd_kind[fd] == 0) { mem_write64(SYSCTX, 0, 0 - 9); return 0; }
+        if (fd == 0) { mem_write64(SYSCTX, 0, 0); } else { mem_write64(SYSCTX, 0, 2); }
+        return 0;
+    }
+    if (cmd == 2 || cmd == 4) { mem_write64(SYSCTX, 0, 0); return 0; }
+    mem_write64(SYSCTX, 0, 0 - 22);
     return 0;
 }
 
 func sys_dispatch2() {
     let nr = mem_read64(SYSCTX, 0);
     let r = 0;
+    if (trace_sys != 0) { serial_puts("[S"); serial_putn(nr); serial_putc(':'); serial_puthex(mem_read64(SYSCTX, 0x30)); serial_putc(','); serial_puthex(mem_read64(SYSCTX, 0x28)); serial_puts("]"); }
     if (nr == 0) { r = sys_read(); }
     else if (nr == 1) { r = sys_write(); }
     else if (nr == 2) { r = sys_open(); }
-    else if (nr == 3) { mem_write64(SYSCTX, 0, 0); r = 0; }
+    else if (nr == 3) { r = sys_close(); }
+    else if (nr == 4 || nr == 6) { r = sys_stat(); }
     else if (nr == 5) { r = sys_fstat(); }
+    else if (nr == 8) { r = sys_lseek(); }
     else if (nr == 9) { r = sys_mmap(); }
-    else if (nr == 10) { mem_write64(SYSCTX, 0, 0); r = 0; }
-    else if (nr == 11) { mem_write64(SYSCTX, 0, 0); r = 0; }
+    else if (nr == 10 || nr == 11) { mem_write64(SYSCTX, 0, 0); r = 0; }
     else if (nr == 12) { r = sys_brk(); }
-    else if (nr == 16) { mem_write64(SYSCTX, 0, 0 - 25); r = 0; }
+    else if (nr == 13 || nr == 14) { sys_ret0(); r = 0; }
+    else if (nr == 16) { r = sys_ioctl(); }
+    else if (nr == 19) { r = sys_readv(); }
+    else if (nr == 20) { r = sys_writev(); }
+    else if (nr == 21) { r = sys_access(); }
+    else if (nr == 32) { r = sys_dup(); }
+    else if (nr == 33) { r = sys_dup2(); }
+    else if (nr == 35) { r = sys_nanosleep(); }
+    else if (nr == 39) { mem_write64(SYSCTX, 0, 1); r = 0; }
     else if (nr == 60 || nr == 231) { r = sys_exit(); }
+    else if (nr == 63) { r = sys_uname(); }
+    else if (nr == 72) { r = sys_fcntl(); }
+    else if (nr == 79) { r = sys_getcwd(); }
+    else if (nr == 80 || nr == 161) { sys_ret0(); r = 0; }
     else if (nr == 89) { mem_write64(SYSCTX, 0, 0 - 2); r = 0; }
+    else if (nr == 102 || nr == 104 || nr == 107 || nr == 108) { sys_ret0(); r = 0; }
+    else if (nr == 110 || nr == 186) { mem_write64(SYSCTX, 0, 1); r = 0; }
+    else if (nr == 115) { sys_ret0(); r = 0; }
+    else if (nr == 132 || nr == 235 || nr == 261 || nr == 280) { sys_ret0(); r = 0; }
     else if (nr == 158) { r = sys_arch_prctl(); }
+    else if (nr == 217) { r = sys_getdents64(); }
     else if (nr == 218) { mem_write64(SYSCTX, 0, 1); r = 0; }
+    else if (nr == 228) { r = sys_clock_gettime(); }
+    else if (nr == 257) { r = sys_openat(); }
     else if (nr == 262) { r = sys_newfstatat(); }
     else if (nr == 267) { mem_write64(SYSCTX, 0, 0 - 2); r = 0; }
+    else if (nr == 269) { r = sys_faccessat(); }
     else if (nr == 273) { mem_write64(SYSCTX, 0, 0); r = 0; }
     else if (nr == 302) { r = sys_prlimit64(); }
     else if (nr == 318) { r = sys_getrandom(); }
     else { mem_write64(SYSCTX, 0, 0 - 38); r = 0; }
+    if (trace_sys != 0) { serial_puts("="); serial_putn(mem_read64(SYSCTX, 0)); serial_putc(' '); }
     return r;
 }
 
+func fault_dump() {
+    serial_puts(" err=");
+    serial_puthex(mem_read64(0x150E08, 0));
+    serial_puts(" rip=");
+    serial_puthex(mem_read64(0x150E00, 0));
+    serial_puts(" cr2=");
+    serial_puthex(mem_read64(0x150E10, 0));
+    serial_putc('\n');
+    return 0;
+}
+func fault_report_gp() { serial_puts("\n[GP]"); fault_dump(); return 0; }
+func fault_report_pf() { serial_puts("\n[PF]"); fault_dump(); return 0; }
+
 naked func fault_gp() {
-    asm(0x66, 0xBA, 0xF8, 0x03, 0xB0, 0x5B, 0xEE, 0xB0, 0x47, 0xEE, 0xB0, 0x50, 0xEE, 0xB0, 0x5D, 0xEE, 0xEB, 0xFE);
+    asm(
+        0x48,0x8B,0x44,0x24,0x08,
+        0x48,0xA3, 0x00,0x0E,0x15,0x00,0x00,0x00,0x00,0x00,
+        0x48,0x8B,0x04,0x24,
+        0x48,0xA3, 0x08,0x0E,0x15,0x00,0x00,0x00,0x00,0x00);
+    fault_report_gp();
+    asm(0xFA,0xF4,0xEB,0xFE);
 }
 naked func fault_pf() {
-    asm(0x66, 0xBA, 0xF8, 0x03, 0xB0, 0x5B, 0xEE, 0xB0, 0x50, 0xEE, 0xB0, 0x46, 0xEE, 0xB0, 0x5D, 0xEE, 0xEB, 0xFE);
+    asm(
+        0x48,0x8B,0x44,0x24,0x08,
+        0x48,0xA3, 0x00,0x0E,0x15,0x00,0x00,0x00,0x00,0x00,
+        0x48,0x8B,0x04,0x24,
+        0x48,0xA3, 0x08,0x0E,0x15,0x00,0x00,0x00,0x00,0x00,
+        0x0F,0x20,0xD0,
+        0x48,0xA3, 0x10,0x0E,0x15,0x00,0x00,0x00,0x00,0x00);
+    fault_report_pf();
+    asm(0xFA,0xF4,0xEB,0xFE);
 }
 
 naked func user_enter(frame) {

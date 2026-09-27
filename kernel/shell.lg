@@ -243,6 +243,7 @@ func sh_dispatch(buf) {
     if (str_eq(cmd, "help")) { sh_cmd_help(); return 0; }
     if (str_eq(cmd, "ls")) { fs_list(); return 0; }
     if (str_eq(cmd, "info")) { sh_cmd_info(); return 0; }
+    if (str_eq(cmd, "trace")) { if (trace_sys == 0) { trace_sys = 1; serial_puts("trace on\n"); } else { trace_sys = 0; serial_puts("trace off\n"); } return 0; }
     if (str_eq(cmd, "clear")) { sh_cmd_clear(); return 0; }
     if (str_eq(cmd, "echo")) { str_puts_at(b, argstart); serial_putc('\n'); return 0; }
     if (str_eq(cmd, "heap")) { sh_copy_arg(b, argstart, ab); sh_cmd_heap(); return 0; }

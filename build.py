@@ -7,9 +7,9 @@ BLOB_LBA = 256
 SECTOR = 512
 PAGE = 0x1000
 
-RAMFS_BASE = 0x800000  
-SCRATCH_BASE = 0xA00000 
-SCRATCH_LIMIT = 0xC00000  
+RAMFS_BASE = 0x4000000  
+SCRATCH_BASE = 0x6000000 
+SCRATCH_LIMIT = 0x8000000  
 
 LGC_SRC = os.environ.get("LGC_SRC", "/root/compiler/src/lgc.lg")
 if LGC_SRC == "NO":
@@ -35,6 +35,7 @@ SLOTS = [
     ("kernel/shell.lg", "shell.lg"),
     ("kernel/vga.lg", "vga.lg"),
     ("usr/hello_c.c", "hello_c.c"),
+    ("usr/busybox", "busybox"),
     ("README.md", "README.md"),
     ("build.py", "build.py"),
     (USERFS_LG, "userfs.lg"),

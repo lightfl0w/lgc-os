@@ -5,13 +5,12 @@ const FS_MAX_FILES = 20;
 const FS_MAX_SIZE = 0x100000;
 const FS_NAME_LEN = 32;
 
-const FS_SCRATCH_BASE = 0xA00000;
-const FS_SCRATCH_LIMIT = 0xC00000;
+const FS_SCRATCH_BASE = 0x6000000;
+const FS_SCRATCH_LIMIT = 0x8000000;
 
 let char fs_names[640];
 let int fs_used[20];
 let int fs_len[20];
-let int fs_pos[20];
 let int fs_addr[20];
 let int fs_bump = FS_SCRATCH_BASE;
 
@@ -45,7 +44,6 @@ func fs_preload(slot, name, addr, len) {
     fs_set_name(slot, name);
     fs_addr[slot] = addr;
     fs_len[slot] = len;
-    fs_pos[slot] = 0;
     fs_used[slot] = 1;
     return 0;
 }
@@ -63,7 +61,6 @@ func fs_create_slot(name) {
     fs_addr[slot] = fs_bump;
     fs_bump = fs_bump + FS_MAX_SIZE;
     fs_len[slot] = 0;
-    fs_pos[slot] = 0;
     fs_used[slot] = 1;
     return slot;
 }

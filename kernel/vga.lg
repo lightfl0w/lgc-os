@@ -44,6 +44,12 @@ func kbd_decode(sc) {
     return c;
 }
 
+func console_poll() {
+    if ((inb(SERIAL_LSR) & 1) != 0) { return 1; }
+    if ((inb(KBD_STATUS_PORT) & 1) != 0) { return 1; }
+    return 0;
+}
+
 func console_getc() {
     while (1) {
         if ((inb(SERIAL_LSR) & 1) != 0) { return inb(SERIAL_COM1); }
