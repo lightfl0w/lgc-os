@@ -1,0 +1,76 @@
+@import "io.lg";
+
+const FRAME_BASE = 0x1000000;
+const FRAME_LIMIT = 0x4000000;
+const PTE_U = 7;
+const PDE_PS = 0x83;
+
+let int frame_next = 0;
+let int cur_pmid = 0;
+
+func mm_init() {
+    frame_next = FRAME_BASE;
+    cur_pmid = 0x1000;
+    return 0;
+}
+
+func frame_alloc() {
+    if (frame_next + 0x1000 > FRAME_LIMIT) { return 0 - 1; }
+    let f = frame_next;
+    frame_next = frame_next + 0x1000;
+    return f;
+}
+
+func pg_base(v) { return (v >> 12) << 12; }
+
+naked func as_invlpg(v) { asm(0x0F,0x01,0x3F,0xC3); }
+
+func as_new() {
+    let pml4 = frame_alloc();
+    if (pml4 < 0) { return -1; }
+    mem_zero(pml4, 0x1000);
+    let pdpt = frame_alloc();
+    if (pdpt < 0) { return -1; }
+    mem_zero(pdpt, 0x1000);
+    let pd = frame_alloc();
+    if (pd < 0) { return -1; }
+    mem_zero(pd, 0x1000);
+    let pt0 = frame_alloc();
+    if (pt0 < 0) { return -1; }
+    mem_zero(pt0, 0x1000);
+    for j in 0..0x180 { mem_write64(pt0, j * 8, (j << 12) | 3); }
+    mem_write64(pd, 0, pt0 | PTE_U);
+    for i in 1..8 {
+        let pt = frame_alloc();
+        if (pt < 0) { return -1; }
+        mem_zero(pt, 0x1000);
+        mem_write64(pd, i * 8, pt | PTE_U);
+    }
+    for r in 8..0x40 { mem_write64(pd, r * 8, (r << 21) | PDE_PS); }
+    mem_write64(pdpt, 0, pd | PTE_U);
+    mem_write64(pml4, 0, pdpt | PTE_U);
+    return pml4;
+}
+
+func as_map_user(pmid, va) {
+    let pdpt = pg_base(mem_read64(pmid, 0));
+    let pd = pg_base(mem_read64(pdpt, 0));
+    let pdi = (va >> 21) & 511;
+    let pde = mem_read64(pd, pdi * 8);
+    if ((pde & 1) == 0) { return 0 - 1; }
+    let pt = pg_base(pde);
+    let pti = (va >> 12) & 511;
+    if ((mem_read64(pt, pti * 8) & 1) != 0) { return 0; }
+    let f = frame_alloc();
+    if (f < 0) { return 0 - 1; }
+    mem_zero(f, 0x1000);
+    mem_write64(pt, pti * 8, f | PTE_U);
+    as_invlpg(va);
+    return 0;
+}
+
+func as_use_boot() {
+    cur_pmid = 0x1000;
+    setcr3(0x1000);
+    return 0;
+}

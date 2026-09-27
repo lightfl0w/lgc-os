@@ -217,6 +217,10 @@ func sh_cmd_exec() {
     let fd = fs_open(ef);
     if (fd < 0) { serial_puts("exec: no such file: "); str_put(ef); serial_putc('\n'); return 0; }
     let img0 = fs_file_data(fd); let char* img = img0;
+    let pmid = as_new();
+    if (pmid < 0) { serial_puts("exec: out of frames\n"); return 0; }
+    cur_pmid = pmid;
+    setcr3(pmid);
     let entry = elf_load(img);
     user_setup_brk(elf_max_end);
     serial_puts("exec: "); str_put(ef); serial_puts(" entry="); serial_puthex(entry); serial_putc('\n');
@@ -271,6 +275,7 @@ func sh_repl() {
 }
 
 func sh_resume() {
+    as_use_boot();
     sti();
     serial_puts("exit=");
     let c = user_exit_code;

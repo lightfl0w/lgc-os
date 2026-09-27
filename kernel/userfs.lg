@@ -5,115 +5,40 @@ func userfs_init() {
     fs_preload(1, "a.lg", 0x400F000, 130);
     fs_preload(2, "hello_c", 0x4010000, 856720);
     fs_preload(3, "ata.lg", 0x40E2000, 2389);
-    fs_preload(4, "core.lg", 0x40E3000, 26800);
-    fs_preload(5, "elf.lg", 0x40EA000, 837);
-    fs_preload(6, "fs.lg", 0x40EB000, 2374);
-    fs_preload(7, "heap.lg", 0x40EC000, 1708);
-    fs_preload(8, "io.lg", 0x40ED000, 1760);
-    fs_preload(9, "os.lg", 0x40EE000, 873);
-    fs_preload(10, "shell.lg", 0x40EF000, 10192);
-    fs_preload(11, "vga.lg", 0x40F2000, 3548);
-    fs_preload(12, "hello_c.c", 0x40F3000, 223);
-    fs_preload(13, "busybox", 0x40F4000, 1131168);
-    fs_preload(14, "README.md", 0x4209000, 3695);
-    fs_preload(15, "build.py", 0x420A000, 3135);
-    fs_preload(16, "userfs.lg", 0x420B000, 4096);
+    fs_preload(4, "core.lg", 0x40E3000, 28808);
+    fs_preload(5, "elf.lg", 0x40EB000, 837);
+    fs_preload(6, "fs.lg", 0x40EC000, 2374);
+    fs_preload(7, "heap.lg", 0x40ED000, 1708);
+    fs_preload(8, "io.lg", 0x40EE000, 1760);
+    fs_preload(9, "mm.lg", 0x40EF000, 2352);
+    fs_preload(10, "os.lg", 0x40F0000, 888);
+    fs_preload(11, "shell.lg", 0x40F1000, 10345);
+    fs_preload(12, "vga.lg", 0x40F4000, 3548);
+    fs_preload(13, "hello_c.c", 0x40F5000, 223);
+    fs_preload(14, "busybox", 0x40F6000, 1131168);
+    fs_preload(15, "README.md", 0x420B000, 3695);
+    fs_preload(16, "build.py", 0x420C000, 3166);
+    fs_preload(17, "userfs.lg", 0x420D000, 4096);
     fs_load_disk(0, 256, 116);
     fs_load_disk(1, 372, 1);
     fs_load_disk(2, 373, 1674);
     fs_load_disk(3, 2047, 5);
-    fs_load_disk(4, 2052, 53);
-    fs_load_disk(5, 2105, 2);
-    fs_load_disk(6, 2107, 5);
-    fs_load_disk(7, 2112, 4);
-    fs_load_disk(8, 2116, 4);
-    fs_load_disk(9, 2120, 2);
-    fs_load_disk(10, 2122, 20);
-    fs_load_disk(11, 2142, 7);
-    fs_load_disk(12, 2149, 1);
-    fs_load_disk(13, 2150, 2210);
-    fs_load_disk(14, 4360, 8);
-    fs_load_disk(15, 4368, 7);
-    fs_load_disk(16, 4375, 8);
+    fs_load_disk(4, 2052, 57);
+    fs_load_disk(5, 2109, 2);
+    fs_load_disk(6, 2111, 5);
+    fs_load_disk(7, 2116, 4);
+    fs_load_disk(8, 2120, 4);
+    fs_load_disk(9, 2124, 5);
+    fs_load_disk(10, 2129, 2);
+    fs_load_disk(11, 2131, 21);
+    fs_load_disk(12, 2152, 7);
+    fs_load_disk(13, 2159, 1);
+    fs_load_disk(14, 2160, 2210);
+    fs_load_disk(15, 4370, 8);
+    fs_load_disk(16, 4378, 7);
+    fs_load_disk(17, 4385, 8);
     return 0;
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 

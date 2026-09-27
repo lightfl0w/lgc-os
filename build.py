@@ -31,6 +31,7 @@ SLOTS = [
     ("kernel/fs.lg", "fs.lg"),
     ("kernel/heap.lg", "heap.lg"),
     ("kernel/io.lg", "io.lg"),
+    ("kernel/mm.lg", "mm.lg"),
     ("kernel/os.lg", "os.lg"),
     ("kernel/shell.lg", "shell.lg"),
     ("kernel/vga.lg", "vga.lg"),

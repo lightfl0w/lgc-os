@@ -10,6 +10,7 @@
 func main() {
     vga_clear();
     kbd_init();
+    mm_init();
     serial_puts("lgc-os booting: gdt/idt/paging/wx/pic/pit...\n");
     gdt_init();
     idt_set_gate(0x80, addr(syscall_isr), 3);
