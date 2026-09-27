@@ -4,10 +4,8 @@
 @import "heap.lg";
 @import "fs.lg";
 @import "elf.lg";
-@import "usrelf.lg";
+@import "userfs.lg";
 @import "shell.lg";
-
-let char usr_elf_image[512];
 
 func main() {
     vga_clear();
@@ -35,9 +33,7 @@ func main() {
     pit_init(1193);
     sti();
 
-    let char* sp = usr_elf_image;
-    let fsize = usrelf_bytes(sp);
-    fs_create("init.elf", sp, fsize);
+    userfs_init();
 
     sh_run();
     return 0;

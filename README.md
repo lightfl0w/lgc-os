@@ -13,7 +13,7 @@ io.lg     COM1 串口和读写字节的助手
 heap.lg   内核堆
 fs.lg     一个简易 RAMFS
 elf.lg    ELF64 加载器，按 PT_LOAD 映射
-usrelf.lg 由 tools/mkelf.py 从 usr/hello.elf 生成
+userfs.lg 由 build.py 生成，声明预加载到固定物理地址的 RAMFS 槽位
 ```
 
 ## 编译 && 运行
@@ -30,7 +30,11 @@ python ./build.py
 |----|------|------|------|
 | 0  | read | rdi = fd, rsi = buf, rdx = count | 读取字节数 |
 | 1  | write | rdi = fd, rsi = buf, rdx = count | 写入字节数 |
+| 2  | open | rdi = path, rsi = flags, rdx = mode | fd |
+| 3  | close | rdi = fd | 0 |
 | 60 / 231 | exit / exit_group | rdi = 退出码 | 不返回 |
+
+- 出错返回负 errno：`-2` ENOENT、`-9` EBADF、`-28` ENOSPC
 
 未知编号返回 `-38` (ENOSYS)。
 
@@ -52,4 +56,5 @@ python ./build.py
 - [x] ring0 命令 shell（内建命令 + exec 跑 ELF）
 - [x] 输出改到 VGA 画面 + PS/2 键盘输入（串口降级做测试回退）
 - [x] exec 后进程 exit 返回 shell
+- [x] 在 lgc-os 内运行自举版 lgc 编译器并编译源码
 - [ ] 调度策略（时间片/优先级）

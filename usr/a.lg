@@ -1,0 +1,10 @@
+func main() {
+  let int i = 0;
+  let int s = 0;
+  while (i < 10) {
+    s = s + i * i;
+    i = i + 1;
+  }
+  print s;
+  return 0;
+}

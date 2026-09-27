@@ -6,6 +6,10 @@
 
 let char sh_line[128];
 let char sh_argbuf[32];
+let char sh_argv_buf[192];
+let int sh_argv_off[8];
+let int sh_ptrs[8];
+let int sh_argc;
 let int user_frame[8];
 
 func str_len(p) { let char* s = p; let i = 0; while (s[i] != 0) { i += 1; } return i; }
@@ -31,6 +35,48 @@ func str_parse_dec(b, start) {
     return v;
 }
 
+func sh_parse_args(b, start) {
+    let char* s = b; let char* d = sh_argv_buf;
+    let i = start; let o = 0; let n = 0; let go = 1;
+    while (go != 0) {
+        while (s[i] == ' ') { i += 1; }
+        if (s[i] == 0) { go = 0; }
+        else if (n >= 8) { go = 0; }
+        else {
+            sh_argv_off[n] = o;
+            n += 1;
+            let tok = 1;
+            while (tok != 0) {
+                if (s[i] == 0 || s[i] == ' ') { tok = 0; }
+                else { d[o] = s[i]; o += 1; i += 1; }
+            }
+            d[o] = 0; o += 1;
+        }
+    }
+    sh_argc = n;
+    return n;
+}
+
+func sh_build_stack() {
+    let sp = USER_STACK_TOP;
+    let k = sh_argc - 1;
+    while (k >= 0) {
+        let a0 = sh_argv_buf + sh_argv_off[k]; let char* a = a0;
+        let sz = str_len(a) + 1;
+        sp = sp - sz;
+        let j = 0;
+        while (j < sz) { mem_write8(sp, j, mem_read8(a, j)); j += 1; }
+        sh_ptrs[k] = sp;
+        k -= 1;
+    }
+    sp = sp - (sp & 7);
+    sp = sp - 8; mem_write64(sp, 0, 0);
+    k = sh_argc - 1;
+    while (k >= 0) { sp = sp - 8; mem_write64(sp, 0, sh_ptrs[k]); k -= 1; }
+    sp = sp - 8; mem_write64(sp, 0, sh_argc);
+    return sp;
+}
+
 func sh_readline(buf) {
     let char* b = buf; let n = 0;
     while (1) {
@@ -50,7 +96,7 @@ func sh_cmd_help() {
     serial_puts("  help            this text\n");
     serial_puts("  ls              list ramfs files\n");
     serial_puts("  cat <file>      dump a file (non-printable as '.')\n");
-    serial_puts("  exec <file.elf> load ELF via VFS and jump to ring3\n");
+    serial_puts("  exec <file.elf> [args...]  load ELF via VFS and jump to ring3\n");
     serial_puts("  info            ticks / heap / file count\n");
     serial_puts("  heap <bytes>    alloc+free from kernel heap\n");
     serial_puts("  echo <text>     print text\n");
@@ -94,16 +140,17 @@ func sh_cmd_cat() {
 }
 
 func sh_cmd_exec() {
-    let char* ap = sh_argbuf;
-    if (str_len(ap) == 0) { serial_puts("usage: exec <elf-file>\n"); return 0; }
-    let fd = fs_open(ap);
-    if (fd < 0) { serial_puts("exec: no such file: "); str_put(ap); serial_putc('\n'); return 0; }
+    if (sh_argc == 0) { serial_puts("usage: exec <elf-file> [args...]\n"); return 0; }
+    let e0 = sh_argv_buf + sh_argv_off[0]; let char* ef = e0;
+    let fd = fs_open(ef);
+    if (fd < 0) { serial_puts("exec: no such file: "); str_put(ef); serial_putc('\n'); return 0; }
     let img0 = fs_file_data(fd); let char* img = img0;
     let entry = elf_load(img);
-    serial_puts("exec: "); str_put(ap); serial_puts(" entry="); serial_puthex(entry); serial_putc('\n');
+    serial_puts("exec: "); str_put(ef); serial_puts(" entry="); serial_puthex(entry); serial_putc('\n');
     serial_putc('[');
+    let sp = sh_build_stack();
     let int* u = user_frame;
-    u[0] = entry; u[1] = SEL_UCODE; u[2] = 0x2; u[3] = USER_STACK; u[4] = SEL_UDATA;
+    u[0] = entry; u[1] = SEL_UCODE; u[2] = 0x2; u[3] = sp; u[4] = SEL_UDATA;
     let uf = user_frame;
     user_enter(uf);
     return 0;
@@ -128,7 +175,7 @@ func sh_dispatch(buf) {
     if (str_eq(cmd, "echo")) { str_puts_at(b, argstart); serial_putc('\n'); return 0; }
     if (str_eq(cmd, "heap")) { sh_copy_arg(b, argstart, ab); sh_cmd_heap(); return 0; }
     if (str_eq(cmd, "cat")) { sh_copy_arg(b, argstart, ab); sh_cmd_cat(); return 0; }
-    if (str_eq(cmd, "exec")) { sh_copy_arg(b, argstart, ab); sh_cmd_exec(); return 0; }
+    if (str_eq(cmd, "exec")) { sh_parse_args(b, argstart); sh_cmd_exec(); return 0; }
     serial_puts("unknown command: "); str_put(cmd); serial_puts(" (try 'help')\n");
     return 0;
 }

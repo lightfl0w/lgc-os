@@ -1,3 +1,5 @@
+@import "fs.lg";
+
 const IDT_BASE = 0x120000;
 const IDTR_BASE = 0x121000;
 
@@ -18,7 +20,7 @@ const SYS_LSTAR = 0x160000;
 const SYSCTX = 0x160100;
 const SYS_RSP = 0x160200;
 const USER_CODE = 0x180000;
-const USER_STACK = 0x1A0000;
+const USER_STACK_TOP = 0x600000;
 const SEL_UCODE = 0x33;
 const SEL_UDATA = 0x2B;
 
@@ -80,19 +82,15 @@ func paging_wx() {
         let int idx = 0x100 + k;
         pt[idx] = (idx << 12) | 1;
     }
-    pt[0x180] = (0x180 << 12) | 5;
-    for j in 0x181..0x1B0 { pt[j] = (j << 12) | 0x8000000000000007; }
+    for j in 0x180..0x200 { pt[j] = (j << 12) | 7; }
     pd[0] = 0x4007;
+    pd[1] = 0x200000 | 0x87;
+    pd[2] = 0x400000 | 0x87;
+    pd[3] = 0x600000 | 0x87;
+    pd[4] = 0x800000 | 0x87;
     pml4[0] = pml4[0] | 0x04;
     pdpt[0] = pdpt[0] | 0x04;
     asm(0x0F, 0x20, 0xC0, 0x0D, 0x00, 0x00, 0x01, 0x00, 0x0F, 0x22, 0xC0);
-    setcr3(PG_PML4);
-    return 0;
-}
-
-func pt_user_code_w(on) {
-    let int* pt = PG_PT;
-    if (on != 0) { pt[0x180] = (0x180 << 12) | 7; } else { pt[0x180] = (0x180 << 12) | 5; }
     setcr3(PG_PML4);
     return 0;
 }
@@ -229,35 +227,104 @@ naked func syscall_entry() {
         0xFF,0xE0);
 }
 
+func sys_write() {
+    let fd = mem_read64(SYSCTX, 0x30);
+    let b0 = mem_read64(SYSCTX, 0x28);
+    let char* buf = b0;
+    let cnt = mem_read64(SYSCTX, 0x10);
+    if (fd == 1 || fd == 2) {
+        let k = 0;
+        while (k < cnt) { serial_putc(buf[k]); k += 1; }
+        mem_write64(SYSCTX, 0, k);
+        return 0;
+    }
+    let slot = fd - 3;
+    if (slot >= 0) {
+        if (slot < FS_MAX_FILES) {
+            if (fs_used[slot] != 0) {
+                let pos = fs_pos[slot];
+                if (pos + cnt > FS_MAX_SIZE) { cnt = FS_MAX_SIZE - pos; }
+                let n = 0;
+                while (n < cnt) { mem_write8(fs_file_data(slot), pos + n, buf[n]); n += 1; }
+                fs_pos[slot] = pos + n;
+                if (pos + n > fs_len[slot]) { fs_len[slot] = pos + n; }
+                mem_write64(SYSCTX, 0, n);
+                return 0;
+            }
+        }
+    }
+    mem_write64(SYSCTX, 0, 0 - 9);
+    return 0;
+}
+
+func sys_read() {
+    let fd = mem_read64(SYSCTX, 0x30);
+    let b0 = mem_read64(SYSCTX, 0x28);
+    let char* buf = b0;
+    let cnt = mem_read64(SYSCTX, 0x10);
+    if (fd == 0) {
+        let k = 0;
+        while (k < cnt) { buf[k] = console_getc(); k += 1; }
+        mem_write64(SYSCTX, 0, k);
+        return 0;
+    }
+    let slot = fd - 3;
+    if (slot >= 0) {
+        if (slot < FS_MAX_FILES) {
+            if (fs_used[slot] != 0) {
+                let pos = fs_pos[slot];
+                let m = cnt;
+                let avail = fs_len[slot] - pos;
+                if (m > avail) { m = avail; }
+                let n = 0;
+                while (n < m) { buf[n] = mem_read8(fs_file_data(slot), pos + n); n += 1; }
+                fs_pos[slot] = pos + n;
+                mem_write64(SYSCTX, 0, n);
+                return 0;
+            }
+        }
+    }
+    mem_write64(SYSCTX, 0, 0 - 9);
+    return 0;
+}
+
+func sys_open() {
+    let p0 = mem_read64(SYSCTX, 0x30);
+    let char* path = p0;
+    let flags = mem_read64(SYSCTX, 0x28);
+    let s = fs_open(path);
+    if (flags == 0) {
+        if (s < 0) { mem_write64(SYSCTX, 0, 0 - 2); return 0; }
+        fs_pos[s] = 0;
+        mem_write64(SYSCTX, 0, s + 3);
+        return 0;
+    }
+    if (s < 0) { s = fs_create_slot(path); }
+    if (s < 0) { mem_write64(SYSCTX, 0, 0 - 28); return 0; }
+    fs_len[s] = 0;
+    fs_pos[s] = 0;
+    mem_write64(SYSCTX, 0, s + 3);
+    return 0;
+}
+
+func sys_exit() {
+    user_exit_code = mem_read64(SYSCTX, 0x30);
+    let int* c = RING0_CTX;
+    c[0] = addr(sh_resume);
+    c[1] = RING0_RSP;
+    return 1;
+}
+
 func sys_dispatch2() {
     let nr = mem_read64(SYSCTX, 0);
-    if (nr == 1) {
-        let b0 = mem_read64(SYSCTX, 0x28);
-        let char* buf = b0;
-        let cnt = mem_read64(SYSCTX, 0x10);
-        let n = 0;
-        while (n < cnt) { serial_putc(buf[n]); n += 1; }
-        mem_write64(SYSCTX, 0, n);
-        return 0;
-    }
-    if (nr == 0) {
-        let b0 = mem_read64(SYSCTX, 0x28);
-        let char* buf = b0;
-        let cnt = mem_read64(SYSCTX, 0x10);
-        let n = 0;
-        while (n < cnt) { buf[n] = console_getc(); n += 1; }
-        mem_write64(SYSCTX, 0, n);
-        return 0;
-    }
-    if (nr == 60 || nr == 231) {
-        user_exit_code = mem_read64(SYSCTX, 0x30);
-        let int* c = RING0_CTX;
-        c[0] = addr(sh_resume);
-        c[1] = RING0_RSP;
-        return 1;
-    }
-    mem_write64(SYSCTX, 0, 0 - 38);
-    return 0;
+    let r = 0;
+    if (nr == 0) { r = sys_read(); }
+    else if (nr == 1) { r = sys_write(); }
+    else if (nr == 2) { r = sys_open(); }
+    else if (nr == 3) { r = 0; }
+    else if (nr == 60 || nr == 231) { r = sys_exit(); }
+    else { mem_write64(SYSCTX, 0, 0 - 38); r = 0; }
+    return r;
 }
 
 naked func fault_gp() {

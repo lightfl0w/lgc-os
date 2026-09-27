@@ -1,0 +1,7 @@
+@import "fs.lg";
+
+func userfs_init() {
+    fs_preload(0, "lgc.elf", 59127);
+    fs_preload(1, "a.lg", 130);
+    return 0;
+}
